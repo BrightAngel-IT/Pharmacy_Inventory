@@ -1988,6 +1988,10 @@ module.exports = {
   getPurchases,
   createPurchase,
   transferInventory,
+  receiveTransfer,
+  receiveTripTransfer,
+  cancelTransfer,
+  updateTransfer,
   getTransfers,
   settleReturn,
   openShift,
@@ -2110,38 +2114,48 @@ async function createPurchase(payload) {
   return newPurchase;
 }
 
-async function transferInventory({ sourceBranch, destBranch, products }) {
+async function transferInventory({ sourceBranch, destBranch, products, transports = [] }) {
   if (isDatabaseReady()) {
     const updatePromises = products.map(async (item) => {
-      // Check stock first
+      // Check stock in source branch first
       const sourceStock = await BranchStock.findOne({ branch: sourceBranch, productId: item.product });
-      if (!sourceStock || sourceStock.quantityInStock < item.quantity) {
-        throw createError(`Insufficient stock in source branch for product ID ${item.product}.`);
+      const currentStock = sourceStock ? sourceStock.quantityInStock : 0;
+      if (currentStock < item.quantity) {
+        const prod = await Product.findById(item.product).lean();
+        const prodName = prod ? prod.name : item.product;
+        throw createError(`Insufficient stock in ${sourceBranch} for "${prodName}". Available stock: ${currentStock} pcs, but requested: ${item.quantity} pcs.`);
       }
 
-      // Subtract from source
+      // Subtract from source branch immediately (dispatched)
       await BranchStock.findOneAndUpdate(
         { branch: sourceBranch, productId: item.product },
         { $inc: { quantityInStock: -Number(item.quantity) } }
       );
-      // Add to destination
-      await BranchStock.findOneAndUpdate(
-        { branch: destBranch, productId: item.product },
-        { $inc: { quantityInStock: Number(item.quantity) } },
-        { upsert: true, new: true }
-      );
+      // NOTE: Destination branch stock will ONLY be credited when confirmed/received by destination branch
     });
 
     await Promise.all(updatePromises);
 
-    // Save transfer record
-    await Transfer.create({
+    // Filter valid transports if any
+    const validTransports = Array.isArray(transports) 
+      ? transports
+          .filter(t => t && (t.vehicleNumber || t.driverName || t.dispatchedQty || t.notes))
+          .map(t => ({
+            ...t,
+            status: 'IN_TRANSIT'
+          }))
+      : [];
+
+    // Save transfer record in IN_TRANSIT status
+    const transfer = await Transfer.create({
       sourceBranch,
       destBranch,
-      products
+      products,
+      transports: validTransports,
+      status: 'IN_TRANSIT'
     });
 
-    return { success: true };
+    return transfer;
   } else {
     // In-memory version
     products.forEach(item => {
@@ -2151,12 +2165,227 @@ async function transferInventory({ sourceBranch, destBranch, products }) {
       }
       sourceBs.quantityInStock -= Number(item.quantity);
       sourceBs.updatedAt = new Date().toISOString();
+    });
 
-      let destBs = memoryStore.branchStocks.find(entry => entry.branch === destBranch && String(entry.productId) === String(item.product));
+    if (!memoryStore.transfers) memoryStore.transfers = [];
+    const validTransports = Array.isArray(transports) 
+      ? transports
+          .filter(t => t && (t.vehicleNumber || t.driverName || t.dispatchedQty || t.notes))
+          .map(t => ({
+            ...t,
+            status: 'IN_TRANSIT'
+          }))
+      : [];
+    const newTransfer = {
+      _id: generateId(),
+      sourceBranch,
+      destBranch,
+      products,
+      transports: validTransports,
+      status: 'IN_TRANSIT',
+      createdAt: new Date().toISOString()
+    };
+    memoryStore.transfers.push(newTransfer);
+
+    return newTransfer;
+  }
+}
+
+async function receiveTripTransfer({ transferId, tripIndex, user }) {
+  if (isDatabaseReady()) {
+    const transfer = await Transfer.findById(transferId);
+    if (!transfer) throw createError('Transfer record not found.', 404);
+
+    // Check authorization: Destination branch admin OR Super Admin when destination is Main Warehouse
+    const isAuthorized = (user.branch === transfer.destBranch) || 
+                         (user.role === 'super_admin' && (transfer.destBranch === 'Main Warehouse' || user.branch === transfer.destBranch));
+    if (!isAuthorized) {
+      throw createError(`Only the admin of ${transfer.destBranch} can confirm receipt of this stock.`, 403);
+    }
+
+    if (!transfer.transports || !transfer.transports[tripIndex]) {
+      throw createError('Trip not found.', 404);
+    }
+
+    const trip = transfer.transports[tripIndex];
+    if (trip.status === 'RECEIVED') {
+      throw createError('This trip has already been confirmed and received.', 400);
+    }
+
+    // If trip has specific item breakdown, use those exact quantities!
+    // Otherwise fallback to proportional distribution
+    const hasTripItems = Array.isArray(trip.items) && trip.items.length > 0;
+
+    let addStockPromises;
+    if (hasTripItems) {
+      addStockPromises = trip.items.map(async (tItem) => {
+        const qtyToAdd = Number(tItem.quantity || (Number(tItem.unitQty || 0) * Number(tItem.piecesPerUnit || 1)));
+        if (qtyToAdd > 0) {
+          await BranchStock.findOneAndUpdate(
+            { branch: transfer.destBranch, productId: tItem.product },
+            { $inc: { quantityInStock: Number(qtyToAdd) } },
+            { upsert: true, new: true }
+          );
+        }
+      });
+    } else {
+      const totalTrips = transfer.transports.length;
+      const alreadyReceivedTrips = transfer.transports.filter(t => t.status === 'RECEIVED').length;
+      const isLastTrip = (alreadyReceivedTrips + 1) >= totalTrips;
+
+      addStockPromises = transfer.products.map(async (item) => {
+        let qtyForThisTrip = Math.floor(item.quantity / totalTrips);
+        if (isLastTrip) {
+          const alreadyCredited = Math.floor(item.quantity / totalTrips) * alreadyReceivedTrips;
+          qtyForThisTrip = item.quantity - alreadyCredited;
+        }
+
+        if (qtyForThisTrip > 0) {
+          await BranchStock.findOneAndUpdate(
+            { branch: transfer.destBranch, productId: item.product },
+            { $inc: { quantityInStock: Number(qtyForThisTrip) } },
+            { upsert: true, new: true }
+          );
+        }
+      });
+    }
+
+    await Promise.all(addStockPromises);
+
+    // Mark this trip received
+    trip.status = 'RECEIVED';
+    trip.receivedBy = `${user.name || user.username || 'Admin'} (${user.branch || user.role})`;
+    trip.receivedAt = new Date();
+
+    // Check if ALL trips are now received
+    const allTripsReceived = transfer.transports.every(t => t.status === 'RECEIVED');
+    if (allTripsReceived) {
+      transfer.status = 'RECEIVED';
+      transfer.receivedBy = trip.receivedBy;
+      transfer.receivedAt = new Date();
+    }
+
+    await transfer.save();
+    return transfer;
+  } else {
+    // In-memory
+    const transfer = (memoryStore.transfers || []).find(t => String(t._id) === String(transferId));
+    if (!transfer) throw createError('Transfer not found.', 404);
+    if (!transfer.transports || !transfer.transports[tripIndex]) throw createError('Trip not found.', 404);
+
+    // Check authorization: Destination branch admin OR Super Admin when destination is Main Warehouse
+    const isAuthorized = (user.branch === transfer.destBranch) || 
+                         (user.role === 'super_admin' && (transfer.destBranch === 'Main Warehouse' || user.branch === transfer.destBranch));
+    if (!isAuthorized) {
+      throw createError(`Only the admin of ${transfer.destBranch} can confirm receipt of this stock.`, 403);
+    }
+
+    const trip = transfer.transports[tripIndex];
+    if (trip.status === 'RECEIVED') throw createError('Trip already received.', 400);
+
+    const totalTrips = transfer.transports.length;
+    const alreadyReceivedTrips = transfer.transports.filter(t => t.status === 'RECEIVED').length;
+    const isLastTrip = (alreadyReceivedTrips + 1) >= totalTrips;
+
+    transfer.products.forEach(item => {
+      let qtyForThisTrip = Math.floor(item.quantity / totalTrips);
+      if (isLastTrip) {
+        const alreadyCredited = Math.floor(item.quantity / totalTrips) * alreadyReceivedTrips;
+        qtyForThisTrip = item.quantity - alreadyCredited;
+      }
+
+      let destBs = memoryStore.branchStocks.find(entry => entry.branch === transfer.destBranch && String(entry.productId) === String(item.product));
       if (!destBs) {
         destBs = {
           _id: generateId(),
-          branch: destBranch,
+          branch: transfer.destBranch,
+          productId: String(item.product),
+          quantityInStock: 0,
+          reorderLevel: 0,
+          rack: { rowNumber: 1, columnNumber: 1, shelfNumber: 1 },
+          createdAt: new Date().toISOString(),
+        };
+        memoryStore.branchStocks.push(destBs);
+      }
+      destBs.quantityInStock += Number(qtyForThisTrip);
+      destBs.updatedAt = new Date().toISOString();
+    });
+
+    trip.status = 'RECEIVED';
+    trip.receivedBy = `${user.name || user.username || 'Admin'} (${user.branch || user.role})`;
+    trip.receivedAt = new Date().toISOString();
+
+    if (transfer.transports.every(t => t.status === 'RECEIVED')) {
+      transfer.status = 'RECEIVED';
+      transfer.receivedBy = trip.receivedBy;
+      transfer.receivedAt = new Date().toISOString();
+    }
+
+    return transfer;
+  }
+}
+
+async function receiveTransfer({ transferId, user, notes = '' }) {
+  if (isDatabaseReady()) {
+    const transfer = await Transfer.findById(transferId);
+    if (!transfer) {
+      throw createError('Transfer record not found.', 404);
+    }
+
+    if (transfer.status === 'RECEIVED') {
+      throw createError('This transfer has already been confirmed and received.', 400);
+    }
+
+    if (transfer.status === 'CANCELLED') {
+      throw createError('Cannot receive a cancelled transfer.', 400);
+    }
+
+    // Check authorization: Must be super_admin OR admin of the destination branch
+    // Check authorization: Destination branch admin OR Super Admin when destination is Main Warehouse
+    const isAuthorized = (user.branch === transfer.destBranch) || 
+                         (user.role === 'super_admin' && (transfer.destBranch === 'Main Warehouse' || user.branch === transfer.destBranch));
+    if (!isAuthorized) {
+      throw createError(`Only the admin of ${transfer.destBranch} can confirm receipt of this stock.`, 403);
+    }
+
+    // Now increment the stock in destination branch
+    const addStockPromises = transfer.products.map(async (item) => {
+      await BranchStock.findOneAndUpdate(
+        { branch: transfer.destBranch, productId: item.product },
+        { $inc: { quantityInStock: Number(item.quantity) } },
+        { upsert: true, new: true }
+      );
+    });
+
+    await Promise.all(addStockPromises);
+
+    // Update status to RECEIVED
+    transfer.status = 'RECEIVED';
+    transfer.receivedBy = `${user.name || user.username || 'Admin'} (${user.branch || user.role})`;
+    transfer.receivedAt = new Date();
+    if (notes) transfer.receivedNotes = notes;
+    await transfer.save();
+
+    return transfer;
+  } else {
+    // In-memory
+    const transfer = (memoryStore.transfers || []).find(t => String(t._id) === String(transferId));
+    if (!transfer) throw createError('Transfer not found.', 404);
+    if (transfer.status === 'RECEIVED') throw createError('Transfer already received.', 400);
+
+    // Check authorization: Destination branch admin OR Super Admin when destination is Main Warehouse
+    const isAuthorized = (user.branch === transfer.destBranch) || 
+                         (user.role === 'super_admin' && (transfer.destBranch === 'Main Warehouse' || user.branch === transfer.destBranch));
+    if (!isAuthorized) {
+      throw createError(`Only the admin of ${transfer.destBranch} can confirm receipt of this stock.`, 403);
+    }
+
+    transfer.products.forEach(item => {
+      let destBs = memoryStore.branchStocks.find(entry => entry.branch === transfer.destBranch && String(entry.productId) === String(item.product));
+      if (!destBs) {
+        destBs = {
+          _id: generateId(),
+          branch: transfer.destBranch,
           productId: String(item.product),
           quantityInStock: 0,
           reorderLevel: 0,
@@ -2169,25 +2398,221 @@ async function transferInventory({ sourceBranch, destBranch, products }) {
       destBs.updatedAt = new Date().toISOString();
     });
 
-    if (!memoryStore.transfers) memoryStore.transfers = [];
-    memoryStore.transfers.push({
-      _id: generateId(),
-      sourceBranch,
-      destBranch,
-      products,
-      createdAt: new Date().toISOString()
-    });
+    transfer.status = 'RECEIVED';
+    transfer.receivedBy = `${user.name || user.username || 'Admin'} (${user.branch || user.role})`;
+    transfer.receivedAt = new Date().toISOString();
+    if (notes) transfer.receivedNotes = notes;
 
-    return { success: true };
+    return transfer;
   }
 }
 
-async function getTransfers() {
+async function cancelTransfer({ transferId, user, reason = '' }) {
   if (isDatabaseReady()) {
-    const transfers = await Transfer.find().populate('products.product', 'name sku image').sort({ createdAt: -1 }).lean();
+    const transfer = await Transfer.findById(transferId);
+    if (!transfer) throw createError('Transfer record not found.', 404);
+
+    if (transfer.status === 'RECEIVED') {
+      throw createError('Cannot cancel/undo a transfer that has already been fully received by the destination branch.', 400);
+    }
+
+    if (transfer.status === 'CANCELLED') {
+      throw createError('This transfer is already cancelled.', 400);
+    }
+
+    // Check if any trip was already received
+    const anyTripReceived = transfer.transports?.some(tr => tr.status === 'RECEIVED');
+    if (anyTripReceived) {
+      throw createError('Cannot cancel transfer because one or more trips have already been received by destination branch.', 400);
+    }
+
+    // Authorization: Super Admin or Source Branch Admin can cancel before delivery
+    const isAuthorized = user.role === 'super_admin' || user.branch === transfer.sourceBranch;
+    if (!isAuthorized) {
+      throw createError('Only Super Admin or Source Branch Admin can cancel this transfer.', 403);
+    }
+
+    // Revert/refund the stock back to the SOURCE branch
+    const revertPromises = transfer.products.map(async (item) => {
+      await BranchStock.findOneAndUpdate(
+        { branch: transfer.sourceBranch, productId: item.product },
+        { $inc: { quantityInStock: Number(item.quantity) } },
+        { upsert: true, new: true }
+      );
+    });
+
+    await Promise.all(revertPromises);
+
+    transfer.status = 'CANCELLED';
+    transfer.receivedNotes = reason ? `Cancelled by ${user.name || user.username}: ${reason}` : `Cancelled by ${user.name || user.username}`;
+    await transfer.save();
+
+    return transfer;
+  } else {
+    // In-memory version
+    const transfer = (memoryStore.transfers || []).find(t => String(t._id) === String(transferId));
+    if (!transfer) throw createError('Transfer not found.', 404);
+    if (transfer.status === 'RECEIVED') throw createError('Cannot cancel already received transfer.', 400);
+    if (transfer.status === 'CANCELLED') throw createError('Transfer already cancelled.', 400);
+
+    const anyTripReceived = transfer.transports?.some(tr => tr.status === 'RECEIVED');
+    if (anyTripReceived) throw createError('Cannot cancel transfer with received trips.', 400);
+
+    // Revert stock back to source branch
+    transfer.products.forEach(item => {
+      let sourceBs = memoryStore.branchStocks.find(entry => entry.branch === transfer.sourceBranch && String(entry.productId) === String(item.product));
+      if (!sourceBs) {
+        sourceBs = {
+          _id: generateId(),
+          branch: transfer.sourceBranch,
+          productId: String(item.product),
+          quantityInStock: 0,
+          reorderLevel: 0,
+          rack: { rowNumber: 1, columnNumber: 1, shelfNumber: 1 },
+          createdAt: new Date().toISOString(),
+        };
+        memoryStore.branchStocks.push(sourceBs);
+      }
+      sourceBs.quantityInStock += Number(item.quantity);
+      sourceBs.updatedAt = new Date().toISOString();
+    });
+
+    transfer.status = 'CANCELLED';
+    transfer.receivedNotes = reason ? `Cancelled by ${user.name || user.username}: ${reason}` : `Cancelled by ${user.name || user.username}`;
+    return transfer;
+  }
+}
+
+async function updateTransfer({ transferId, user, sourceBranch, destBranch, products, transports }) {
+  if (isDatabaseReady()) {
+    const transfer = await Transfer.findById(transferId);
+    if (!transfer) throw createError('Transfer record not found.', 404);
+
+    if (transfer.status === 'RECEIVED') {
+      throw createError('Cannot edit an exchange that has already been fully received by destination branch.', 400);
+    }
+    if (transfer.status === 'CANCELLED') {
+      throw createError('Cannot edit a cancelled exchange.', 400);
+    }
+
+    const anyTripReceived = transfer.transports?.some(tr => tr.status === 'RECEIVED');
+    if (anyTripReceived) {
+      throw createError('Cannot edit exchange because one or more trips have already been received.', 400);
+    }
+
+    const isAuthorized = user.role === 'super_admin' || user.branch === transfer.sourceBranch;
+    if (!isAuthorized) {
+      throw createError('Only Super Admin or Source Branch Admin can edit this exchange.', 403);
+    }
+
+    // Step 1: Revert previous stock deduction from the original source branch
+    const revertOldPromises = transfer.products.map(async (oldItem) => {
+      await BranchStock.findOneAndUpdate(
+        { branch: transfer.sourceBranch, productId: oldItem.product },
+        { $inc: { quantityInStock: Number(oldItem.quantity) } },
+        { upsert: true, new: true }
+      );
+    });
+    await Promise.all(revertOldPromises);
+
+    // Step 2: Validate available stock for the new products in the source branch
+    const checkStockPromises = products.map(async (newItem) => {
+      const sourceStock = await BranchStock.findOne({ branch: sourceBranch, productId: newItem.product });
+      const currentStock = sourceStock ? sourceStock.quantityInStock : 0;
+      if (currentStock < newItem.quantity) {
+        const prod = await Product.findById(newItem.product).lean();
+        const prodName = prod ? prod.name : newItem.product;
+        throw createError(`Insufficient stock in ${sourceBranch} for "${prodName}". Available stock: ${currentStock} pcs, requested: ${newItem.quantity} pcs.`);
+      }
+    });
+
+    try {
+      await Promise.all(checkStockPromises);
+    } catch (err) {
+      // If validation fails, re-deduct the original items so stock stays consistent!
+      const reDeductPromises = transfer.products.map(async (oldItem) => {
+        await BranchStock.findOneAndUpdate(
+          { branch: transfer.sourceBranch, productId: oldItem.product },
+          { $inc: { quantityInStock: -Number(oldItem.quantity) } }
+        );
+      });
+      await Promise.all(reDeductPromises);
+      throw err;
+    }
+
+    // Step 3: Deduct the new stock quantities from the source branch
+    const deductNewPromises = products.map(async (newItem) => {
+      await BranchStock.findOneAndUpdate(
+        { branch: sourceBranch, productId: newItem.product },
+        { $inc: { quantityInStock: -Number(newItem.quantity) } }
+      );
+    });
+    await Promise.all(deductNewPromises);
+
+    // Step 4: Update the transfer document
+    const validTransports = Array.isArray(transports) 
+      ? transports
+          .filter(t => t && (t.vehicleNumber || t.driverName || t.dispatchedQty || t.notes || (t.items && t.items.length > 0)))
+          .map(t => ({
+            ...t,
+            status: 'IN_TRANSIT'
+          }))
+      : [];
+
+    transfer.sourceBranch = sourceBranch;
+    transfer.destBranch = destBranch;
+    transfer.products = products;
+    transfer.transports = validTransports;
+    transfer.status = 'IN_TRANSIT';
+    await transfer.save();
+
+    return transfer;
+  } else {
+    // In-memory
+    const transfer = (memoryStore.transfers || []).find(t => String(t._id) === String(transferId));
+    if (!transfer) throw createError('Transfer not found.', 404);
+    if (transfer.status === 'RECEIVED' || transfer.status === 'CANCELLED') {
+      throw createError('Cannot edit received or cancelled transfer.', 400);
+    }
+
+    // Revert old
+    transfer.products.forEach(oldItem => {
+      let sourceBs = memoryStore.branchStocks.find(entry => entry.branch === transfer.sourceBranch && String(entry.productId) === String(oldItem.product));
+      if (sourceBs) sourceBs.quantityInStock += Number(oldItem.quantity);
+    });
+
+    // Deduct new
+    products.forEach(newItem => {
+      let sourceBs = memoryStore.branchStocks.find(entry => entry.branch === sourceBranch && String(entry.productId) === String(newItem.product));
+      if (!sourceBs || sourceBs.quantityInStock < newItem.quantity) {
+        throw createError(`Insufficient stock in ${sourceBranch} for product ${newItem.product}`);
+      }
+      sourceBs.quantityInStock -= Number(newItem.quantity);
+    });
+
+    transfer.sourceBranch = sourceBranch;
+    transfer.destBranch = destBranch;
+    transfer.products = products;
+    transfer.transports = transports;
+    return transfer;
+  }
+}
+
+async function getTransfers(filters = {}) {
+  if (isDatabaseReady()) {
+    const query = {};
+    if (filters.branch) {
+      // Return transfers where branch is either source or destination
+      query.$or = [{ sourceBranch: filters.branch }, { destBranch: filters.branch }];
+    }
+    const transfers = await Transfer.find(query).populate('products.product', 'name sku image').sort({ createdAt: -1 }).lean();
     return transfers;
   }
-  return (memoryStore.transfers || []).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  let list = memoryStore.transfers || [];
+  if (filters.branch) {
+    list = list.filter(t => t.sourceBranch === filters.branch || t.destBranch === filters.branch);
+  }
+  return list.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 }
 
 async function getBranches() {

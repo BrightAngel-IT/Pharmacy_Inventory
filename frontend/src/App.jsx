@@ -1072,6 +1072,12 @@ function App() {
               </AdminRoute>
             } />
 
+            <Route path="/transfers" element={
+              <AdminRoute session={session}>
+                <InventoryTransfer api={api} session={session} onNotice={setNotice} refreshCoreData={refreshCoreData} />
+              </AdminRoute>
+            } />
+
             <Route path="/suppliers" element={<AdminRoute session={session}><Suppliers api={api} session={session} onNotice={setNotice} refreshCoreData={refreshCoreData} /></AdminRoute>} />
             <Route path="/purchases" element={<AdminRoute session={session}><Purchases api={api} session={session} onNotice={setNotice} refreshCoreData={refreshCoreData} /></AdminRoute>} />
             <Route path="/customers" element={<Customers api={api} session={session} onNotice={setNotice} refreshCoreData={refreshCoreData} />} />

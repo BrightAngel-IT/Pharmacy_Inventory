@@ -67,6 +67,7 @@ export function Sidebar({
       ? [
           { path: '/pos', label: 'Billing Desk', icon: ShoppingCart },
           { path: '/inventory', label: 'Inventory', icon: Warehouse },
+          { path: '/transfers', label: 'Incoming Exchange', icon: ArrowRightLeft },
           { path: '/suppliers', label: 'Suppliers', icon: User },
           { path: '/customers', label: 'Customers', icon: User },
           { path: '/staff', label: 'Employees', icon: Users },
