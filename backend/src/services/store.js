@@ -884,7 +884,11 @@ async function createSale(payload) {
     invoiceNumber,
     customerName: String(payload.customerName || 'Walk-in customer').trim(),
     loyaltyCard: String(payload.loyaltyCard || '').trim(),
+<<<<<<< HEAD
     paymentMethod: ['cash', 'card', 'credit', 'split', 'upi', 'bank-transfer'].includes(payload.paymentMethod)
+=======
+    paymentMethod: ['cash', 'card', 'upi', 'bank-transfer', 'credit', 'split'].includes(payload.paymentMethod)
+>>>>>>> 2d307ea5cf9831b78cf27b4773dcc5cb6c24e5d9
       ? payload.paymentMethod
       : 'cash',
     splitPayments: payload.splitPayments || undefined,
