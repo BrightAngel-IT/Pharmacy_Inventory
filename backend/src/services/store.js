@@ -256,10 +256,11 @@ async function seedDatabase() {
     await User.insertMany(users);
   }
 
-  if (productCount === 0) {
-    const products = prepareSeedProducts();
-    await Product.insertMany(products);
-  }
+  // Do not auto-seed demo grocery products (INV-COF-001 etc.) into Pharmacy database
+  // if (productCount === 0) {
+  //   const products = prepareSeedProducts();
+  //   await Product.insertMany(products);
+  // }
 
   // if (saleCount === 0) {
   //   const [users, products] = await Promise.all([User.find().lean(), Product.find().lean()]);
@@ -884,11 +885,7 @@ async function createSale(payload) {
     invoiceNumber,
     customerName: String(payload.customerName || 'Walk-in customer').trim(),
     loyaltyCard: String(payload.loyaltyCard || '').trim(),
-<<<<<<< HEAD
     paymentMethod: ['cash', 'card', 'credit', 'split', 'upi', 'bank-transfer'].includes(payload.paymentMethod)
-=======
-    paymentMethod: ['cash', 'card', 'upi', 'bank-transfer', 'credit', 'split'].includes(payload.paymentMethod)
->>>>>>> 2d307ea5cf9831b78cf27b4773dcc5cb6c24e5d9
       ? payload.paymentMethod
       : 'cash',
     splitPayments: payload.splitPayments || undefined,

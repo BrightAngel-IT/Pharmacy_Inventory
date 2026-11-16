@@ -2072,7 +2072,7 @@ export function InventoryTransfer({ api, session, onNotice, refreshCoreData }) {
               </button>
               <span className="muted small font-bold">Page {currentPage} of {totalPages}</span>
               <button 
-                className="btn btn-outline small" e
+                className="btn btn-outline small" em
                 onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
                 disabled={currentPage === totalPages}
               >
