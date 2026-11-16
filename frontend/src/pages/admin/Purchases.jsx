@@ -33,6 +33,7 @@ export default function Purchases({ api, session, onNotice, refreshCoreData }) {
   const [search, setSearch] = useState('')
   const [startDate, setStartDate] = useState('')
   const [endDate, setEndDate] = useState('')
+  const [expandedPurchaseId, setExpandedPurchaseId] = useState(null)
   const itemsPerPage = 10
 
   const [formData, setFormData] = useState({
@@ -70,7 +71,21 @@ export default function Purchases({ api, session, onNotice, refreshCoreData }) {
   function addItem() {
     setFormData({
       ...formData,
-      items: [...formData.items, { productId: '', unit: 'pcs', piecesPerUnit: 1, quantity: 1, costPrice: '', unitPrice: '' }]
+      items: [
+        ...formData.items,
+        {
+          productId: '',
+          batchNumber: '',
+          expiryDate: '',
+          unit: 'pack',
+          packType: '100 Pack',
+          piecesPerUnit: 100,
+          quantity: 1, // number of packs
+          costPrice: '', // cost per pack
+          unitPrice: '', // cost per piece
+          sellingPrice: '', // selling price per piece
+        }
+      ]
     })
   }
 
@@ -110,9 +125,59 @@ export default function Purchases({ api, session, onNotice, refreshCoreData }) {
       }
     } else if (field === 'productId') {
       const selectedProduct = products.find(p => String(p._id) === String(value));
-      if (selectedProduct && selectedProduct.costPrice) {
-        item.unitPrice = Number(selectedProduct.costPrice).toFixed(2);
-        item.costPrice = (Number(selectedProduct.costPrice) * ppu).toFixed(2);
+      if (selectedProduct) {
+        item.itemType = selectedProduct.itemType || 'TABLET_CAPSULE';
+        item.tabletsPerCard = Number(selectedProduct.tabletsPerCard || 12);
+        item.cardsPerBox = Number(selectedProduct.cardsPerBox || 10);
+        item.boxesPerCarton = Number(selectedProduct.boxesPerCarton || 20);
+
+        if (item.itemType === 'TABLET_CAPSULE') {
+          item.packType = 'Master Carton';
+          // 1 Master Carton = boxesPerCarton * cardsPerBox * tabletsPerCard
+          item.piecesPerUnit = item.boxesPerCarton * item.cardsPerBox * item.tabletsPerCard; // 20 * 10 * 12 = 2,400
+        } else {
+          item.packType = selectedProduct.unit === 'bottle' ? 'Bottle' : 'Unit/Box';
+          item.piecesPerUnit = 1;
+        }
+
+        if (selectedProduct.costPrice) {
+          item.unitPrice = Number(selectedProduct.costPrice).toFixed(2);
+          item.costPrice = (Number(selectedProduct.costPrice) * item.piecesPerUnit).toFixed(2);
+        }
+        if (selectedProduct.price) {
+          item.sellingPrice = Number(selectedProduct.price).toFixed(2);
+        }
+      }
+    } else if (field === 'boxesPerCarton' || field === 'cardsPerBox' || field === 'tabletsPerCard') {
+      const bpc = Number(item.boxesPerCarton || 20);
+      const cpb = Number(item.cardsPerBox || 10);
+      const tpc = Number(item.tabletsPerCard || 12);
+      item.piecesPerUnit = bpc * cpb * tpc;
+      if (item.costPrice) {
+        item.unitPrice = (Number(item.costPrice) / item.piecesPerUnit).toFixed(2);
+      }
+    } else if (field === 'packType') {
+      if (value === '100 Pack') {
+        item.piecesPerUnit = 100;
+        item.unit = 'pack';
+      } else if (value === '50 Pack') {
+        item.piecesPerUnit = 50;
+        item.unit = 'pack';
+      } else if (value === '20 Pack') {
+        item.piecesPerUnit = 20;
+        item.unit = 'pack';
+      } else if (value === '10 Pack') {
+        item.piecesPerUnit = 10;
+        item.unit = 'pack';
+      } else if (value === 'Bottle' || value === 'Tube' || value === 'Loose/Single') {
+        item.piecesPerUnit = 1;
+        item.unit = value.toLowerCase();
+      }
+      const newPpu = Number(item.piecesPerUnit) || 1;
+      if (item.unitPrice) {
+        item.costPrice = (Number(item.unitPrice) * newPpu).toFixed(2);
+      } else if (item.costPrice) {
+        item.unitPrice = (Number(item.costPrice) / newPpu).toFixed(2);
       }
     }
 
@@ -122,17 +187,37 @@ export default function Purchases({ api, session, onNotice, refreshCoreData }) {
 
   async function handleSubmit(e) {
     e.preventDefault()
-    if (formData.items.length === 0) return onNotice({ type: 'error', text: 'Add at least one item.' })
+    if (!formData.supplier) return onNotice({ type: 'error', text: 'Please select a supplier partner.' })
     if (session.user.role === 'super_admin' && !formData.branch) return onNotice({ type: 'error', text: 'Please select a destination branch.' })
+    if (formData.items.length === 0) return onNotice({ type: 'error', text: 'Add at least one item to the procurement order.' })
+
+    // Strict Pharmacy Validation
+    for (let idx = 0; idx < formData.items.length; idx++) {
+      const item = formData.items[idx];
+      const lineNum = idx + 1;
+      if (!item.productId) return onNotice({ type: 'error', text: `Item #${lineNum}: Please select a medicine / product.` })
+      if (!item.batchNumber || !String(item.batchNumber).trim()) return onNotice({ type: 'error', text: `Item #${lineNum}: Batch Number is required for medical inventory.` })
+      if (!item.expiryDate) return onNotice({ type: 'error', text: `Item #${lineNum}: Expiry Date is mandatory.` })
+      if (!item.quantity || Number(item.quantity) <= 0) return onNotice({ type: 'error', text: `Item #${lineNum}: Please enter a valid quantity.` })
+      if (!item.costPrice || Number(item.costPrice) <= 0) return onNotice({ type: 'error', text: `Item #${lineNum}: Please enter the purchase cost.` })
+      if (!item.sellingPrice || Number(item.sellingPrice) <= 0) return onNotice({ type: 'error', text: `Item #${lineNum}: Please enter the retail selling price (Sell/Tab).` })
+    }
 
     try {
       const formattedProducts = formData.items.map(i => {
         const totalPieces = Number(i.quantity) * Number(i.piecesPerUnit || 1)
-        const costPerPiece = Number(i.costPrice) / Number(i.piecesPerUnit || 1)
+        const costPerPiece = Number(i.unitPrice) || (Number(i.costPrice) / Number(i.piecesPerUnit || 1))
         return {
           product: i.productId,
+          batchNumber: i.batchNumber || `BAT-${Date.now().toString().slice(-6)}`,
+          expiryDate: i.expiryDate,
+          packType: i.packType || `${i.piecesPerUnit || 1} Pack`,
+          packQuantity: Number(i.quantity),
+          piecesPerPack: Number(i.piecesPerUnit || 1),
           quantity: totalPieces,
-          costPrice: costPerPiece
+          costPrice: costPerPiece,
+          sellingPrice: Number(i.sellingPrice || 0),
+          costPerPack: Number(i.costPrice || 0)
         }
       })
 
@@ -155,8 +240,10 @@ export default function Purchases({ api, session, onNotice, refreshCoreData }) {
     }
   }
 
-  const filteredPurchases = purchases.filter(p => {
-    let match = true;
+  const filteredPurchases = [...purchases]
+    .sort((a, b) => new Date(b.date || b.createdAt || 0) - new Date(a.date || a.createdAt || 0))
+    .filter(p => {
+      let match = true;
     if (search) {
       const q = search.toLowerCase();
       const s = suppliers.find(sup => String(sup._id) === String(p.supplier?._id || p.supplier));
@@ -321,102 +408,165 @@ export default function Purchases({ api, session, onNotice, refreshCoreData }) {
                 </button>
               </div>
 
-              <div className="stack gap-2">
+              <div className="stack gap-3">
                 {formData.items.map((item, idx) => {
-                  const isBulk = ['box', 'carton', 'bag', 'case', 'pack', 'dozen', 'bundle', 'roll', 'set'].includes(item.unit)
-
                   return (
-                    <div key={idx} className="cluster gap-3 panel-strong p-3 wrap-row" style={{ borderRadius: '12px', border: '1px solid var(--border)' }}>
-                      <select
-                        className="input flex-1"
-                        style={{ minWidth: '200px' }}
-                        value={item.productId}
-                        onChange={e => updateItem(idx, 'productId', e.target.value)}
-                        required
-                      >
-                        <option value="">-- Product --</option>
-                        {products.map(p => <option key={p._id} value={p._id}>{p.name} ({p.sku})</option>)}
-                      </select>
+                    <div key={idx} className="stack gap-2 p-3 panel-strong wrap-row" style={{ borderRadius: '12px', border: '1px solid var(--border)' }}>
+                      <div className="cluster gap-2 align-center flex-wrap">
+                        <span className="badge neutral bold" style={{ width: '28px', textAlign: 'center' }}>#{idx + 1}</span>
+                        <select
+                          className="input flex-1"
+                          style={{ minWidth: '220px' }}
+                          value={item.productId}
+                          onChange={e => updateItem(idx, 'productId', e.target.value)}
+                          required
+                        >
+                          <option value="">-- Select Medicine / Product --</option>
+                          {products.map(p => <option key={p._id} value={p._id}>{p.name} ({p.sku})</option>)}
+                        </select>
 
-                      <select
-                        className="input"
-                        style={{ width: '120px' }}
-                        value={item.unit}
-                        onChange={e => updateItem(idx, 'unit', e.target.value)}
-                      >
-                        <option value="pcs">Pieces</option>
-                        <option value="box">Box</option>
-                        <option value="carton">Carton</option>
-                        <option value="bag">Bag</option>
-                        <option value="pack">Pack</option>
-                        <option value="case">Case</option>
-                        <option value="dozen">Dozen</option>
-                        <option value="bundle">Bundle</option>
-                        <option value="roll">Roll</option>
-                        <option value="set">Set</option>
-                        <option value="kg">KG</option>
-                        <option value="ltr">Liter</option>
-                      </select>
-
-                      <input
-                        className="input"
-                        type="number"
-                        style={{ width: '90px' }}
-                        placeholder="Qty"
-                        value={item.quantity}
-                        onChange={e => updateItem(idx, 'quantity', Number(e.target.value))}
-                        required
-                        min="1"
-                      />
-
-                      {isBulk && (
-                        <div className="cluster gap-2" style={{ background: 'var(--bg-soft)', padding: '4px 8px', borderRadius: '8px' }}>
-                          <span className="x-small muted whitespace-nowrap">Pieces inside:</span>
-                          <input
-                            className="input compact"
-                            type="number"
-                            style={{ width: '70px', padding: '4px 8px' }}
-                            value={item.piecesPerUnit}
-                            onChange={e => updateItem(idx, 'piecesPerUnit', e.target.value)}
-                            required={isBulk}
-                            min="1"
-                          />
-                        </div>
-                      )}
-
-                      <div className="cluster gap-1">
                         <input
                           className="input"
-                          type="number"
-                          style={{ width: '100px' }}
-                          placeholder={isBulk ? "Cost/Box" : "Cost/Item"}
-                          value={item.costPrice}
-                          onChange={e => updateItem(idx, 'costPrice', e.target.value)}
+                          style={{ width: '140px' }}
+                          placeholder="Batch Number"
+                          value={item.batchNumber || ''}
+                          onChange={e => updateItem(idx, 'batchNumber', e.target.value)}
                           required
-                          min="0"
-                          step="0.01"
                         />
-                      </div>
 
-                      {isBulk && (
-                        <div className="cluster gap-1">
-                          <span className="muted">/</span>
+                        <div className="cluster gap-1 align-center">
+                          <span className="x-small muted whitespace-nowrap">Exp:</span>
                           <input
                             className="input"
-                            type="number"
-                            style={{ width: '100px' }}
-                            placeholder="Cost/Piece"
-                            value={item.unitPrice || ''}
-                            onChange={e => updateItem(idx, 'unitPrice', e.target.value)}
-                            required={isBulk}
-                            min="0"
-                            step="0.01"
+                            type="date"
+                            style={{ width: '140px' }}
+                            value={item.expiryDate ? item.expiryDate.split('T')[0] : ''}
+                            onChange={e => updateItem(idx, 'expiryDate', e.target.value)}
+                            required
                           />
                         </div>
-                      )}
-                      <button type="button" className="icon-btn ghost hover-danger" onClick={() => removeItem(idx)}>
-                        <Trash2 size={16} />
-                      </button>
+
+                        <button type="button" className="icon-btn ghost hover-danger" onClick={() => removeItem(idx)}>
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+
+                      {/* Row 2: Packaging Hierarchy & Quantities */}
+                      <div className="between align-center flex-wrap gap-3 pt-2" style={{ borderTop: '1px dashed var(--border)' }}>
+                        <div className="cluster gap-2 align-center flex-wrap">
+                          <span className="badge info font-bold" style={{ padding: '4px 10px', fontSize: '0.75rem' }}>
+                            {item.packType || 'Master Carton'}
+                          </span>
+
+                          {/* Master Carton Hierarchy Breakdown for Tablets */}
+                          {item.itemType === 'TABLET_CAPSULE' && (
+                            <div className="cluster gap-2 align-center p-2 rounded" style={{ background: 'var(--bg-soft)', border: '1px dashed var(--border)' }}>
+                              <div className="cluster gap-1 align-center">
+                                <span className="x-small muted">Boxes:</span>
+                                <input
+                                  className="input compact font-strong text-center"
+                                  type="number"
+                                  style={{ width: '55px', padding: '4px' }}
+                                  value={item.boxesPerCarton || 20}
+                                  onChange={e => updateItem(idx, 'boxesPerCarton', Number(e.target.value))}
+                                  min="1"
+                                />
+                              </div>
+                              <span className="muted x-small">×</span>
+                              <div className="cluster gap-1 align-center">
+                                <span className="x-small muted">Cards:</span>
+                                <input
+                                  className="input compact font-strong text-center"
+                                  type="number"
+                                  style={{ width: '55px', padding: '4px' }}
+                                  value={item.cardsPerBox || 10}
+                                  onChange={e => updateItem(idx, 'cardsPerBox', Number(e.target.value))}
+                                  min="1"
+                                />
+                              </div>
+                              <span className="muted x-small">×</span>
+                              <div className="cluster gap-1 align-center">
+                                <span className="x-small muted">Tabs:</span>
+                                <input
+                                  className="input compact font-strong text-center"
+                                  type="number"
+                                  style={{ width: '55px', padding: '4px' }}
+                                  value={item.tabletsPerCard || 12}
+                                  onChange={e => updateItem(idx, 'tabletsPerCard', Number(e.target.value))}
+                                  min="1"
+                                />
+                              </div>
+                              <span className="badge neutral x-small font-mono font-bold" style={{ color: 'var(--accent)' }}>
+                                = {item.piecesPerUnit || 2400} tabs/carton
+                              </span>
+                            </div>
+                          )}
+
+                          <div className="cluster gap-1 align-center">
+                            <span className="x-small muted font-bold">Cartons:</span>
+                            <input
+                              className="input font-strong"
+                              type="number"
+                              style={{ width: '80px', textAlign: 'center', borderColor: 'var(--accent)' }}
+                              placeholder="Qty"
+                              value={item.quantity}
+                              onChange={e => updateItem(idx, 'quantity', Number(e.target.value))}
+                              required
+                              min="1"
+                            />
+                            <span className="badge neutral small font-mono font-bold">
+                              = {Number(item.quantity || 1) * Number(item.piecesPerUnit || 1)} Tablets
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Pricing Inputs */}
+                        <div className="cluster gap-3 align-center flex-wrap ml-auto">
+                          <div className="cluster gap-1 align-center">
+                            <span className="x-small muted font-bold">Cost/Carton:</span>
+                            <input
+                              className="input font-strong"
+                              type="number"
+                              style={{ width: '120px' }}
+                              placeholder="Carton Cost"
+                              value={item.costPrice}
+                              onChange={e => updateItem(idx, 'costPrice', e.target.value)}
+                              required
+                              min="0"
+                              step="0.01"
+                            />
+                          </div>
+
+                          <div className="cluster gap-1 align-center">
+                            <span className="x-small muted">Cost/Tab:</span>
+                            <input
+                              className="input"
+                              type="number"
+                              style={{ width: '80px' }}
+                              placeholder="Cost/Pc"
+                              value={item.unitPrice || ''}
+                              onChange={e => updateItem(idx, 'unitPrice', e.target.value)}
+                              min="0"
+                              step="0.01"
+                            />
+                          </div>
+
+                          <div className="cluster gap-1 align-center">
+                            <span className="x-small font-bold" style={{ color: 'var(--accent-strong)' }}>Sell/Tab:</span>
+                            <input
+                              className="input font-strong"
+                              type="number"
+                              style={{ width: '95px', borderColor: 'var(--accent)' }}
+                              placeholder="Selling Price"
+                              value={item.sellingPrice || ''}
+                              onChange={e => updateItem(idx, 'sellingPrice', e.target.value)}
+                              required
+                              min="0.01"
+                              step="0.01"
+                            />
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   )
                 })}
@@ -448,37 +598,130 @@ export default function Purchases({ api, session, onNotice, refreshCoreData }) {
             </tr>
           </thead>
           <tbody>
-            {paginatedPurchases.map(pur => (
-              <tr key={pur._id} className="table-row-hover">
-                <td style={{ paddingLeft: '24px' }}>
-                  <div className="cluster gap-2">
-                    <FileText size={14} className="muted" />
-                    <strong className="small font-mono">#{pur._id.slice(-6).toUpperCase()}</strong>
-                  </div>
-                </td>
-                <td>
-                  <div className="stack">
-                    <strong className="small">{pur.supplier?.name || 'Manual Entry'}</strong>
-                    <span className="muted x-small">{pur.supplier?.category || 'General Supply'}</span>
-                  </div>
-                </td>
-                <td>
-                  <span className="small badge bg-primary-soft">{pur.branch?.name || pur.branch || 'Main Branch'}</span>
-                </td>
-                <td>
-                  <div className="cluster gap-2">
-                    <Boxes size={14} className="muted" />
-                    <span className="small">{pur.products?.length || 0} Line Items</span>
-                  </div>
-                </td>
-                <td>
-                  <strong className="accent-text">{formatCurrency(pur.total)}</strong>
-                </td>
-                <td style={{ textAlign: 'right', paddingRight: '24px' }}>
-                  <span className="muted small">{formatDate(pur.date || pur.createdAt)}</span>
-                </td>
-              </tr>
-            ))}
+            {paginatedPurchases.map(pur => {
+              const isExpanded = expandedPurchaseId === pur._id;
+
+              return (
+                <React.Fragment key={pur._id}>
+                  <tr 
+                    className={`table-row-hover cursor-pointer ${isExpanded ? 'row-selected' : ''}`}
+                    onClick={() => setExpandedPurchaseId(isExpanded ? null : pur._id)}
+                    style={{ background: isExpanded ? 'var(--bg-soft)' : undefined }}
+                    title="Click row to view / hide purchase order details"
+                  >
+                    <td style={{ paddingLeft: '24px' }}>
+                      <div className="cluster gap-2 align-center">
+                        <button 
+                          type="button" 
+                          className="icon-btn ghost compact" 
+                          style={{ width: '22px', height: '22px', padding: 0 }}
+                        >
+                          <span style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>{isExpanded ? '▼' : '▶'}</span>
+                        </button>
+                        <FileText size={14} className="text-accent" />
+                        <strong className="small font-mono text-accent hover-underline">#{pur._id.slice(-6).toUpperCase()}</strong>
+                      </div>
+                    </td>
+                    <td>
+                      <div className="stack">
+                        <strong className="small">{pur.supplier?.name || 'Manual Entry'}</strong>
+                        <span className="muted x-small">{pur.supplier?.category || 'General Supply'}</span>
+                      </div>
+                    </td>
+                    <td>
+                      <span className="small badge bg-primary-soft">{pur.branch?.name || pur.branch || 'Main Branch'}</span>
+                    </td>
+                    <td>
+                      <div className="cluster gap-2">
+                        <Boxes size={14} className="muted" />
+                        <span className="small font-bold">{pur.products?.length || 0} Line Items</span>
+                      </div>
+                    </td>
+                    <td>
+                      <strong className="accent-text">{formatCurrency(pur.total)}</strong>
+                    </td>
+                    <td style={{ textAlign: 'right', paddingRight: '24px' }}>
+                      <span className="muted small">{formatDate(pur.date || pur.createdAt)}</span>
+                    </td>
+                  </tr>
+
+                  {/* Inline Expanded Purchase Invoice Breakdown (Directly Below the Row) */}
+                  {isExpanded && (
+                    <tr style={{ background: 'var(--bg-soft)' }}>
+                      <td colSpan="6" style={{ padding: '16px 24px 20px 36px' }}>
+                        <div className="panel p-4 glass-panel stack gap-3" style={{ border: '1px solid var(--accent)', borderRadius: '14px', background: 'var(--bg-card)' }}>
+                          <div className="between align-center flex-wrap gap-2 pb-2" style={{ borderBottom: '1px dashed var(--border)' }}>
+                            <div className="cluster gap-2 align-center">
+                              <span className="badge info font-bold">📄 INVOICE BREAKDOWN</span>
+                              <span className="small font-mono">Invoice #{pur._id.slice(-6).toUpperCase()}</span>
+                            </div>
+                            <div className="cluster gap-4 align-center small font-mono">
+                              <span>Supplier: <strong>{pur.supplier?.name || 'Manual Supplier'}</strong></span>
+                              <span>Return Terms: <strong>{pur.returnDays || 0} Days</strong></span>
+                              <span>Total: <strong className="accent-text" style={{ fontSize: '1rem' }}>{formatCurrency(pur.total)}</strong></span>
+                            </div>
+                          </div>
+
+                          <div className="overflow-auto" style={{ border: '1px solid var(--border)', borderRadius: '10px' }}>
+                            <table className="w-full professional-table compact" style={{ fontSize: '0.84rem' }}>
+                              <thead>
+                                <tr style={{ background: 'var(--bg-soft)' }}>
+                                  <th style={{ padding: '8px 12px' }}>Medicine / Item</th>
+                                  <th>Batch Number</th>
+                                  <th>Expiry Date</th>
+                                  <th>Packaging Type</th>
+                                  <th>Quantity (Units)</th>
+                                  <th>Cost / Unit</th>
+                                  <th style={{ textAlign: 'right', paddingRight: '12px' }}>Total Cost</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {(pur.products || []).map((item, idx) => {
+                                  const prodName = item.product?.name || item.name || 'Medicine';
+                                  const prodSku = item.product?.sku || item.sku || '';
+                                  // Use exact costPerPack * packQuantity if available, or line total
+                                  const lineTotal = item.costPerPack && item.packQuantity
+                                    ? (Number(item.costPerPack) * Number(item.packQuantity))
+                                    : (Number(item.quantity || 0) * Number(item.costPrice || 0));
+
+                                  return (
+                                    <tr key={idx}>
+                                      <td style={{ padding: '8px 12px' }}>
+                                        <strong>{prodName}</strong>
+                                        {prodSku && <span className="muted x-small font-mono d-block">{prodSku}</span>}
+                                      </td>
+                                      <td>
+                                        <strong className="font-mono text-accent">{item.batchNumber || 'N/A'}</strong>
+                                      </td>
+                                      <td>
+                                        <span style={{ fontWeight: 600 }}>
+                                          {item.expiryDate ? new Date(item.expiryDate).toLocaleDateString() : 'N/A'}
+                                        </span>
+                                      </td>
+                                      <td>
+                                        <span className="pill neutral small">{item.packType || 'Carton'} ({item.piecesPerPack || 1} pcs)</span>
+                                      </td>
+                                      <td>
+                                        <strong className="font-mono">{item.quantity}</strong>
+                                        {item.packQuantity && <span className="muted x-small"> ({item.packQuantity} cartons)</span>}
+                                      </td>
+                                      <td>{formatCurrency(item.costPrice)}</td>
+                                      <td style={{ textAlign: 'right', paddingRight: '12px' }}>
+                                        <strong className="accent-text">{formatCurrency(lineTotal)}</strong>
+                                      </td>
+                                    </tr>
+                                  )
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </React.Fragment>
+              )
+            })}
             {purchases.length === 0 && !loading && (
               <tr>
                 <td colSpan="6" className="p-12 text-center muted">No procurement history recorded.</td>

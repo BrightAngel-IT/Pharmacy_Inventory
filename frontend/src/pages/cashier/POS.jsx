@@ -23,10 +23,12 @@ import {
   UserPlus,
   ScanLine,
   Users,
-  AlertCircle
+  AlertCircle,
+  ReceiptText,
+  Wallet
 } from 'lucide-react'
 import { SectionHeading } from '../../components/SectionHeading'
-import { formatCurrency } from '../../utils'
+import { formatCurrency, authConfig } from '../../utils'
 import { getOfflineShifts } from '../../utils/offlineSync'
 
 export function POS({
@@ -48,6 +50,7 @@ export function POS({
   discountAmount,
   barcodeValue,
   customers,
+  onNotice,
 }) {
   const [cartPage, setCartPage] = useState(0)
   const itemsPerPage = 6
@@ -74,6 +77,41 @@ export function POS({
   const [unpaidMetrics, setUnpaidMetrics] = useState({ totalUnpaid: 0, oldestUnpaidDays: 0, isOverdue: false })
 
   const [hasActiveJob, setHasActiveJob] = useState(true)
+
+  // Drawer Cash Out / Expenses Modal State
+  const [isCashOutModalOpen, setIsCashOutModalOpen] = useState(false)
+  const [cashOutForm, setCashOutForm] = useState({
+    category: 'Lunch',
+    amount: '',
+    notes: ''
+  })
+  const [isSubmittingCashOut, setIsSubmittingCashOut] = useState(false)
+
+  const handleCashOutSubmit = async (e) => {
+    e.preventDefault()
+    if (!cashOutForm.amount || Number(cashOutForm.amount) <= 0) {
+      if (onNotice) onNotice({ type: 'error', text: 'Please enter a valid expense amount.' })
+      return
+    }
+
+    if (!hasActiveJob) {
+      if (onNotice) onNotice({ type: 'error', text: 'Please start your shift (Start Job) before recording cash out.' })
+      return
+    }
+
+    try {
+      setIsSubmittingCashOut(true)
+      await api.post('/shifts/expenses', cashOutForm, authConfig(session.token))
+      if (onNotice) onNotice({ type: 'success', text: `Cash out of Rs. ${Number(cashOutForm.amount).toLocaleString()} (${cashOutForm.category}) recorded.` })
+      setIsCashOutModalOpen(false)
+      setCashOutForm({ category: 'Lunch', amount: '', notes: '' })
+    } catch (err) {
+      const errMsg = err.response?.data?.message || 'Failed to record cash out'
+      if (onNotice) onNotice({ type: 'error', text: errMsg })
+    } finally {
+      setIsSubmittingCashOut(false)
+    }
+  }
 
   React.useEffect(() => {
     async function checkActiveJob() {
@@ -206,11 +244,34 @@ export function POS({
           <div className="between wrap-row gap-2 mb-2">
             <SectionHeading title="Active Cart" text={`${cart.length} items`} />
             <div className="cluster gap-2">
-              <button className="icon-btn glow-on-hover" title="Hold Bill" onClick={handleHoldBill} disabled={cart.length === 0} style={{ width: '40px', height: '40px', background: 'var(--panel-strong)', borderRadius: '12px' }}>
-                <PauseCircle size={18} />
-              </button>
-              <button className="icon-btn glow-on-hover" title="Clear All" onClick={() => setCart([])} disabled={cart.length === 0} style={{ color: 'var(--danger)', width: '40px', height: '40px', background: 'var(--danger-soft)', borderColor: 'transparent', borderRadius: '12px' }}>
-                <Trash2 size={18} />
+              <button 
+                type="button"
+                className="btn small glow-on-hover" 
+                title={hasActiveJob ? "Log Lunch, Transport or Drawer Cash Out" : "Please start shift first"}
+                onClick={() => {
+                  if (!hasActiveJob) {
+                    if (onNotice) onNotice({ type: 'warning', text: 'You need to start your work shift (Start Job) before recording cash out.' })
+                    return
+                  }
+                  setIsCashOutModalOpen(true)
+                }}
+                style={{ 
+                  height: '38px', 
+                  padding: '0 14px',
+                  borderRadius: '10px',
+                  background: 'var(--amber-soft, rgba(245, 158, 11, 0.12))', 
+                  color: 'var(--amber-strong, #b45309)',
+                  borderColor: 'rgba(245, 158, 11, 0.3)',
+                  fontWeight: 700,
+                  fontSize: '0.8rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  opacity: hasActiveJob ? 1 : 0.6
+                }}
+              >
+                <Wallet size={16} />
+                <span>Cash Out</span>
               </button>
             </div>
           </div>
@@ -263,9 +324,45 @@ export function POS({
               <div key={item.productId} style={{ display: 'grid', gridTemplateColumns: 'minmax(170px, 1.5fr) 90px 1fr 1fr 1fr 34px', gap: '5px', padding: '10px 12px', borderBottom: '1px solid var(--border)', background: 'var(--panel)', alignItems: 'center', transition: 'background 0.2s' }} className="glow-on-hover">
                 <div className="stack" style={{ minWidth: 0, gap: '2px', justifySelf: 'stretch', paddingRight: '4px' }}>
                   <strong style={{ fontSize: '0.84rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: '1.1' }}>{item.name}</strong>
-                  <span className="muted" style={{ fontSize: '0.66rem', lineHeight: '1.05' }}>
-                    {item.sku}
-                  </span>
+                  <div className="cluster gap-2" style={{ fontSize: '0.66rem', lineHeight: '1.05' }}>
+                    <span className="muted">{item.sku}</span>
+                    {item.activeBatch?.batchNumber && (
+                      <span className="pill" style={{ 
+                        fontSize: '0.62rem', 
+                        padding: '1px 5px', 
+                        background: 'rgba(59, 130, 246, 0.1)', 
+                        color: 'var(--accent)', 
+                        fontWeight: 700,
+                        border: '1px solid rgba(59, 130, 246, 0.2)'
+                      }}>
+                        Batch: {item.activeBatch.batchNumber}
+                        {item.activeBatch.expiryDate && ` (Exp: ${new Date(item.activeBatch.expiryDate).toLocaleDateString('en-GB', { month: '2-digit', year: '2-digit' })})`}
+                      </span>
+                    )}
+                  </div>
+                  {item.itemType === 'TABLET_CAPSULE' && (
+                    <div className="cluster gap-1 mt-1">
+                      <button
+                        type="button"
+                        className="btn small"
+                        style={{ padding: '1px 5px', fontSize: '0.62rem', background: 'var(--accent-soft)', color: 'var(--accent)', border: '1px solid var(--accent)' }}
+                        onClick={() => {
+                          const cardTabs = item.tabletsPerCard || 12;
+                          const nextQty = Math.min(cardTabs, item.available);
+                          setCart(currentCart => currentCart.map(c => {
+                            if (c.productId === item.productId) {
+                              const effPrice = checkoutForm.loyaltyCard ? (c.loyaltyDiscount || c.price) : c.price;
+                              return { ...c, quantity: nextQty, lineTotal: nextQty * effPrice };
+                            }
+                            return c;
+                          }));
+                        }}
+                        title={`Set to 1 Card (${item.tabletsPerCard || 12} Tablets)`}
+                      >
+                        1 Card ({item.tabletsPerCard || 12} tabs)
+                      </button>
+                    </div>
+                  )}
                 </div>
                 <div className="qty-box" style={{ background: 'var(--bg-soft)', borderRadius: '999px', padding: '2px', justifyContent: 'center', width: 'fit-content', justifySelf: 'center' }}>
                   <button className="qty-btn" type="button" style={{ width: '24px', height: '24px', fontSize: '0.85rem', borderRadius: '999px' }} onClick={() => changeCartQuantity(item.productId, 'decrease')}>-</button>
@@ -320,7 +417,9 @@ export function POS({
             </div>
             {discountAmount > 0 && (
               <div className="between">
-                <span className="small" style={{ color: 'var(--danger)' }}>Discount ({checkoutForm.discount}%)</span>
+                <span className="small" style={{ color: 'var(--danger)' }}>
+                  Discount {checkoutForm.discountType === 'fixed' ? '(LKR Cash)' : `(${checkoutForm.discount}%)`}
+                </span>
                 <span className="font-strong small" style={{ color: 'var(--danger)' }}>-{formatCurrency(discountAmount)}</span>
               </div>
             )}
@@ -417,33 +516,141 @@ export function POS({
                 </select>
               </label>
               <label className="field">
-                <span>Discount (%)</span>
-                <div className="input-shell" style={{ height: '42px', padding: '0 6px' }}>
-                  <Tag size={16} className="muted" />
+                <span style={{ fontSize: '0.8rem', fontWeight: 600 }}>Discount</span>
+                <div 
+                  className="input-shell" 
+                  style={{ 
+                    height: '42px', 
+                    padding: '3px 4px', 
+                    display: 'flex', 
+                    alignItems: 'center', 
+                    gap: '4px',
+                    border: '1.5px solid var(--border)',
+                    borderRadius: '10px'
+                  }}
+                >
+                  {/* Segmented Big Mode Toggle inside the input: RS first, then % */}
+                  <div 
+                    style={{ 
+                      display: 'inline-flex', 
+                      background: 'var(--bg-soft)', 
+                      padding: '2px', 
+                      borderRadius: '8px', 
+                      border: '1px solid var(--border)' 
+                    }}
+                  >
+                    <button
+                      type="button"
+                      style={{
+                        padding: '4px 10px',
+                        fontSize: '0.78rem',
+                        fontWeight: 800,
+                        borderRadius: '6px',
+                        border: 'none',
+                        cursor: 'pointer',
+                        transition: 'all 0.15s ease',
+                        background: checkoutForm.discountType === 'fixed' || !checkoutForm.discountType ? 'var(--accent)' : 'transparent',
+                        color: checkoutForm.discountType === 'fixed' || !checkoutForm.discountType ? '#ffffff' : 'var(--text-soft)',
+                        boxShadow: checkoutForm.discountType === 'fixed' || !checkoutForm.discountType ? '0 2px 4px rgba(0,0,0,0.1)' : 'none'
+                      }}
+                      onClick={() => setCheckoutForm({ ...checkoutForm, discountType: 'fixed' })}
+                      title="Cash / Flat Discount in LKR (Rs.)"
+                    >
+                      Rs
+                    </button>
+                    <button
+                      type="button"
+                      style={{
+                        padding: '4px 10px',
+                        fontSize: '0.78rem',
+                        fontWeight: 800,
+                        borderRadius: '6px',
+                        border: 'none',
+                        cursor: 'pointer',
+                        transition: 'all 0.15s ease',
+                        background: checkoutForm.discountType === 'percentage' ? 'var(--accent)' : 'transparent',
+                        color: checkoutForm.discountType === 'percentage' ? '#ffffff' : 'var(--text-soft)',
+                        boxShadow: checkoutForm.discountType === 'percentage' ? '0 2px 4px rgba(0,0,0,0.1)' : 'none'
+                      }}
+                      onClick={() => setCheckoutForm({ ...checkoutForm, discountType: 'percentage' })}
+                      title="Percentage Discount (%)"
+                    >
+                      %
+                    </button>
+                  </div>
+
                   <input
                     className="ghost-input"
                     type="number"
+                    min="0"
                     placeholder="0"
+                    style={{ 
+                      flex: 1, 
+                      fontSize: '1rem', 
+                      fontWeight: 700, 
+                      textAlign: 'center',
+                      padding: '0 4px'
+                    }}
                     value={checkoutForm.discount}
                     onChange={(e) => setCheckoutForm({ ...checkoutForm, discount: e.target.value })}
                   />
-                  <span className="muted font-strong">%</span>
+
+                  <span 
+                    className="font-strong" 
+                    style={{ 
+                      fontSize: '0.75rem', 
+                      color: 'var(--text-muted)', 
+                      paddingRight: '6px' 
+                    }}
+                  >
+                    {checkoutForm.discountType === 'fixed' ? 'LKR' : '%'}
+                  </span>
                 </div>
               </label>
             </div>
 
             <div className="cluster gap-2 mt-2">
-              {[5, 10, 15, 20].map(val => (
-                <button
-                  key={val}
-                  type="button"
-                  className="pill neutral-soft small glow-on-hover"
-                  style={{ cursor: 'pointer', padding: '4px 12px', border: '1px solid var(--border)', fontSize: '0.7rem' }}
-                  onClick={() => setCheckoutForm({ ...checkoutForm, discount: String(val) })}
-                >
-                  {val}%
-                </button>
-              ))}
+              {checkoutForm.discountType === 'fixed' ? (
+                <>
+                  {[2, 5, 10, 15, 20].map(val => (
+                    <button
+                      key={val}
+                      type="button"
+                      className="pill neutral-soft small glow-on-hover"
+                      style={{ cursor: 'pointer', padding: '4px 10px', border: '1px solid var(--border)', fontSize: '0.72rem', fontWeight: 600 }}
+                      onClick={() => setCheckoutForm({ ...checkoutForm, discount: String(val) })}
+                    >
+                      Rs. {val}
+                    </button>
+                  ))}
+                  {cartSubtotal > 0 && cartSubtotal % 10 !== 0 && (
+                    <button
+                      type="button"
+                      className="pill neutral-soft small glow-on-hover"
+                      style={{ cursor: 'pointer', padding: '4px 10px', border: '1px solid var(--border)', fontSize: '0.72rem', color: 'var(--danger)', fontWeight: 700 }}
+                      onClick={() => {
+                        const remainder = cartSubtotal % 10
+                        setCheckoutForm({ ...checkoutForm, discount: String(remainder) })
+                      }}
+                      title="Round to nearest 10 (e.g. Rs. 95 -> Rs. 90)"
+                    >
+                      -Rs. {cartSubtotal % 10} (Round)
+                    </button>
+                  )}
+                </>
+              ) : (
+                [5, 10, 15, 20].map(val => (
+                  <button
+                    key={val}
+                    type="button"
+                    className="pill neutral-soft small glow-on-hover"
+                    style={{ cursor: 'pointer', padding: '4px 12px', border: '1px solid var(--border)', fontSize: '0.7rem' }}
+                    onClick={() => setCheckoutForm({ ...checkoutForm, discount: String(val) })}
+                  >
+                    {val}%
+                  </button>
+                ))
+              )}
             </div>
 
             {checkoutForm.paymentMethod === 'cash' && (
@@ -1129,6 +1336,122 @@ export function POS({
                 </div>
               )}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Cash Out / Expenses Modal */}
+      {isCashOutModalOpen && (
+        <div className="modal-backdrop">
+          <div className="modal" style={{ maxWidth: '440px', width: '100%' }}>
+            <div className="between mb-3">
+              <div className="cluster gap-2">
+                <div style={{
+                  width: '36px',
+                  height: '36px',
+                  borderRadius: '10px',
+                  background: 'var(--amber-soft, rgba(245, 158, 11, 0.15))',
+                  color: 'var(--amber-strong, #b45309)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center'
+                }}>
+                  <Wallet size={20} />
+                </div>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 800 }}>Cash Out / Drawer Expense</h3>
+                  <p className="muted x-small" style={{ margin: 0 }}>Record petty cash taken from drawer (Lunch, Transport, etc.)</p>
+                </div>
+              </div>
+              <button 
+                type="button"
+                className="icon-btn" 
+                onClick={() => setIsCashOutModalOpen(false)}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleCashOutSubmit} className="stack gap-3">
+              <label className="field">
+                <span className="small font-strong">Expense Category</span>
+                <select
+                  className="input"
+                  style={{ height: '42px', borderRadius: '10px' }}
+                  value={cashOutForm.category}
+                  onChange={(e) => setCashOutForm({ ...cashOutForm, category: e.target.value })}
+                  required
+                >
+                  <option value="Lunch">🍱 Lunch / Food</option>
+                  <option value="Transport">🚕 Transport / Delivery Fare</option>
+                  <option value="Tea/Snacks">☕ Tea & Snacks</option>
+                  <option value="Cleaning/Supplies">🧹 Cleaning & Supplies</option>
+                  <option value="Emergency Purchase">🚨 Emergency Purchase</option>
+                  <option value="Other">📝 Other Drawer Expense</option>
+                </select>
+              </label>
+
+              <label className="field">
+                <span className="small font-strong">Amount (LKR) *</span>
+                <input
+                  type="number"
+                  step="any"
+                  min="1"
+                  className="input"
+                  placeholder="e.g. 450"
+                  style={{ height: '44px', fontSize: '1.1rem', fontWeight: 700, borderRadius: '10px' }}
+                  value={cashOutForm.amount}
+                  onChange={(e) => setCashOutForm({ ...cashOutForm, amount: e.target.value })}
+                  required
+                  autoFocus
+                />
+              </label>
+
+              {/* Quick amount shortcuts */}
+              <div className="cluster gap-2">
+                {[100, 200, 300, 500, 1000].map(amt => (
+                  <button
+                    key={amt}
+                    type="button"
+                    className="pill neutral-soft"
+                    style={{ cursor: 'pointer', fontSize: '0.75rem', fontWeight: 700, padding: '4px 8px' }}
+                    onClick={() => setCashOutForm(prev => ({ ...prev, amount: amt.toString() }))}
+                  >
+                    +{amt}
+                  </button>
+                ))}
+              </div>
+
+              <label className="field">
+                <span className="small font-strong">Notes / Reason (Optional)</span>
+                <input
+                  type="text"
+                  className="input"
+                  placeholder="e.g. Lunch for 2 cashiers"
+                  style={{ height: '40px', borderRadius: '10px' }}
+                  value={cashOutForm.notes}
+                  onChange={(e) => setCashOutForm({ ...cashOutForm, notes: e.target.value })}
+                />
+              </label>
+
+              <div className="between pt-2 mt-2" style={{ borderTop: '1px solid var(--border)' }}>
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => setIsCashOutModalOpen(false)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="btn primary"
+                  disabled={isSubmittingCashOut || !cashOutForm.amount}
+                  style={{ fontWeight: 700 }}
+                >
+                  {isSubmittingCashOut ? 'Recording...' : 'Confirm Cash Out'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

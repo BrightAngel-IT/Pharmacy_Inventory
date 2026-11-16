@@ -6,6 +6,16 @@
 
 const mongoose = require('mongoose');
 
+const shiftExpenseSchema = new mongoose.Schema(
+  {
+    category: { type: String, required: true }, // e.g., 'Lunch', 'Transport', 'Tea', 'Miscellaneous'
+    amount: { type: Number, required: true, min: 0 },
+    notes: { type: String, default: '' },
+    time: { type: Date, default: Date.now }
+  },
+  { _id: true }
+);
+
 const shiftSchema = new mongoose.Schema(
   {
     cashierId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
@@ -19,8 +29,11 @@ const shiftSchema = new mongoose.Schema(
       cash: { type: Number, default: 0 },
       card: { type: Number, default: 0 },
       credit: { type: Number, default: 0 },
-      total: { type: Number, default: 0 }
+      total: { type: Number, default: 0 },
+      cashOutTotal: { type: Number, default: 0 },
+      netCash: { type: Number, default: 0 } // cash - cashOutTotal
     },
+    expenses: [shiftExpenseSchema],
     salesCount: { type: Number, default: 0 },
     date: { type: String, required: true }, // Format: YYYY-MM-DD for easier querying
   },

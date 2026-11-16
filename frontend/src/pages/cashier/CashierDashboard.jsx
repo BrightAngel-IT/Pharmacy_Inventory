@@ -43,53 +43,37 @@ export function CashierDashboard({ overview, session }) {
 
   return (
     <div className="stack gap-6 animate-fade">
-      {/* Premium High-Density Metrics (Matching Requested Style) */}
-      <section className="grid cols-1 md-cols-3 gap-6">
-        {/* Gross Revenue */}
-        <div className="panel glass-panel p-6 stack gap-4 relative overflow-hidden" style={{ borderRadius: '24px', border: '1px solid var(--border)', minHeight: '140px', boxShadow: '0 6px 18px rgba(14, 30, 37, 0.04)' }}>
-          <div className="between align-start">
-            <span className="eyebrow accent-text font-bold" style={{ letterSpacing: '0.05em', fontSize: '0.75rem' }}>GROSS REVENUE</span>
-            <div className="icon-badge success-soft sm" style={{ borderRadius: '8px' }}>
-              <TrendingUp size={14} />
-            </div>
-          </div>
-          <div className="stack gap-1">
-            <h2 className="font-strong" style={{ fontSize: '2rem', letterSpacing: '-0.5px' }}>
-              {formatCurrency(overview?.metrics.revenueToday ?? 0)}
-            </h2>
-            <div style={{ height: '4px', background: 'var(--success)', borderRadius: '2px', width: '85%', marginTop: '8px' }}></div>
-          </div>
-        </div>
-
+      {/* Premium High-Density Metrics for Cashier */}
+      <section className="grid cols-1 md-cols-2 gap-6">
         {/* Bills Issued */}
         <div className="panel glass-panel p-6 stack gap-4 relative overflow-hidden" style={{ borderRadius: '24px', border: '1px solid var(--border)', minHeight: '140px', boxShadow: '0 6px 18px rgba(14, 30, 37, 0.04)' }}>
           <div className="between align-start">
-            <span className="eyebrow accent-text font-bold" style={{ letterSpacing: '0.05em', fontSize: '0.75rem' }}>BILLS ISSUED</span>
+            <span className="eyebrow accent-text font-bold" style={{ letterSpacing: '0.05em', fontSize: '0.75rem' }}>BILLS ISSUED TODAY</span>
             <div className="icon-badge neutral-soft sm" style={{ borderRadius: '8px' }}>
               <Layers size={14} />
             </div>
           </div>
           <div className="stack gap-1">
-            <h2 className="font-strong" style={{ fontSize: '2rem', letterSpacing: '-0.5px' }}>
+            <h2 className="font-strong" style={{ fontSize: '2.2rem', letterSpacing: '-0.5px' }}>
               {overview?.metrics.totalOrdersToday ?? 0} <span style={{ fontSize: '1.2rem', color: 'var(--text-soft)', fontWeight: 600 }}>Bills</span>
             </h2>
-            <p className="muted small mt-1">Finalized Transactions</p>
+            <p className="muted small mt-1">Transactions completed during current shift</p>
           </div>
         </div>
 
-        {/* Cash Flow */}
+        {/* Active Terminal Status */}
         <div className="panel glass-panel p-6 stack gap-4 relative overflow-hidden" style={{ borderRadius: '24px', border: '1px solid var(--border)', minHeight: '140px', boxShadow: '0 6px 18px rgba(14, 30, 37, 0.04)' }}>
           <div className="between align-start">
-            <span className="eyebrow accent-text font-bold" style={{ letterSpacing: '0.05em', fontSize: '0.75rem' }}>CASH FLOW</span>
-            <div className="icon-badge neutral-soft sm" style={{ borderRadius: '8px' }}>
-              <Banknote size={14} />
+            <span className="eyebrow accent-text font-bold" style={{ letterSpacing: '0.05em', fontSize: '0.75rem' }}>TERMINAL STATUS</span>
+            <div className="icon-badge success-soft sm" style={{ borderRadius: '8px' }}>
+              <TrendingUp size={14} />
             </div>
           </div>
           <div className="stack gap-1">
-            <h2 className="font-strong" style={{ fontSize: '2rem', letterSpacing: '-0.5px', color: 'var(--success)' }}>
-              {formatCurrency(overview?.metrics.revenueToday ?? 0)}
+            <h2 className="font-strong text-success" style={{ fontSize: '1.8rem', letterSpacing: '-0.5px' }}>
+              OPERATIONAL
             </h2>
-            <p className="muted small mt-1">Physical Collections</p>
+            <p className="muted small mt-1">Ready for point of sale operations</p>
           </div>
         </div>
       </section>

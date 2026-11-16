@@ -22,6 +22,7 @@ const Branch = require('../models/Branch');
 const BranchStock = require('../models/BranchStock');
 const Purchase = require('../models/Purchase');
 const Transfer = require('../models/Transfer');
+const Batch = require('../models/Batch');
 const Company = require('../models/Company');
 const Shift = require('../models/Shift');
 
@@ -436,6 +437,7 @@ async function getProducts(filters = {}) {
   const branchName = filters.branch;
 
   let branchStocks = [];
+  let branchBatches = [];
   if (isDatabaseReady()) {
     if (branchName) {
       const normalizedBranch = String(branchName).toLowerCase();
@@ -444,8 +446,17 @@ async function getProducts(filters = {}) {
         ? { branch: { $regex: /^(main branch|main warehouse|main)$/i } }
         : { branch: branchName };
       branchStocks = await BranchStock.find(branchQuery).lean();
+      branchBatches = await Batch.find({
+        ...branchQuery,
+        status: 'ACTIVE',
+        availableQuantity: { $gt: 0 }
+      }).sort({ expiryDate: 1 }).lean();
     } else {
       branchStocks = await BranchStock.find().lean();
+      branchBatches = await Batch.find({
+        status: 'ACTIVE',
+        availableQuantity: { $gt: 0 }
+      }).sort({ expiryDate: 1 }).lean();
     }
   } else {
     if (branchName) {
@@ -468,9 +479,23 @@ async function getProducts(filters = {}) {
   branchStocks.forEach(bs => {
     const prodId = String(bs.productId);
     if (!stockMap.has(prodId)) {
-      stockMap.set(prodId, { quantityInStock: 0, reorderLevel: bs.reorderLevel, rack: bs.rack, count: 0 });
+      stockMap.set(prodId, { 
+        quantityInStock: 0, 
+        reorderLevel: bs.reorderLevel, 
+        rack: bs.rack, 
+        count: 0, 
+        branches: [],
+        manualActiveBatchId: bs.manualActiveBatchId 
+      });
     }
     const entry = stockMap.get(prodId);
+    entry.branches.push({
+      branch: bs.branch,
+      quantityInStock: Number(bs.quantityInStock || 0),
+      reorderLevel: bs.reorderLevel,
+      rack: bs.rack,
+      rackLabel: getRackLabel(bs.rack)
+    });
     if (branchName) {
       entry.quantityInStock += Number(bs.quantityInStock);
       entry.reorderLevel = bs.reorderLevel;
@@ -485,18 +510,65 @@ async function getProducts(filters = {}) {
     }
   });
 
+  const batchMap = new Map();
+  branchBatches.forEach(b => {
+    const prodId = String(b.product);
+    if (!batchMap.has(prodId)) {
+      batchMap.set(prodId, []);
+    }
+    batchMap.get(prodId).push({
+      _id: String(b._id),
+      batchNumber: b.batchNumber,
+      expiryDate: b.expiryDate,
+      availableQuantity: Number(b.availableQuantity || 0),
+      costPricePerUnit: Number(b.costPricePerUnit || 0),
+      sellingPricePerUnit: Number(b.sellingPricePerUnit || 0),
+      packType: b.packType,
+      piecesPerPack: b.piecesPerPack,
+      branch: b.branch
+    });
+  });
+
   return products
     .map((product) => {
       const stock = stockMap.get(String(product._id));
       const finalQuantity = stock ? stock.quantityInStock : 0;
       const finalReorder = stock ? stock.reorderLevel : product.reorderLevel;
       const finalRack = stock ? stock.rack : product.rack;
+      const activeBatches = batchMap.get(String(product._id)) || [];
+      
+      // If Admin has manually selected a batch for this branch or product, find that first; otherwise fallback to FEFO (earliest expiry)
+      const branchManualBatchId = stock?.manualActiveBatchId || product.manualActiveBatchId;
+      let primaryBatch = null;
+      if (branchManualBatchId) {
+        primaryBatch = activeBatches.find(b => String(b._id) === String(branchManualBatchId) && b.availableQuantity > 0);
+      }
+      if (!primaryBatch && activeBatches.length > 0) {
+        primaryBatch = activeBatches[0];
+      }
+
+      // In Pharmacy FEFO, active selling price and cost price follow the active batch on shelf!
+      const effectiveSellingPrice = (primaryBatch && primaryBatch.sellingPricePerUnit > 0)
+        ? primaryBatch.sellingPricePerUnit
+        : Number(product.price || 0);
+
+      const effectiveCostPrice = (primaryBatch && primaryBatch.costPricePerUnit > 0)
+        ? primaryBatch.costPricePerUnit
+        : Number(product.costPrice || 0);
+
       return {
         ...product,
+        price: effectiveSellingPrice,
+        costPrice: effectiveCostPrice,
+        catalogPrice: Number(product.price || 0),
+        catalogCostPrice: Number(product.costPrice || 0),
+        activeBatch: primaryBatch,
+        batches: activeBatches,
         quantityInStock: finalQuantity,
         reorderLevel: finalReorder,
         rack: finalRack,
         rackLabel: getRackLabel(finalRack),
+        branchStocks: stock ? stock.branches : [],
       };
     })
     .filter((product) => {
@@ -785,6 +857,9 @@ async function createSale(payload) {
       sku: product.sku,
       barcode: product.barcode,
       price: effectivePrice, // The actual selling price
+      costPrice: Number(product.costPrice || 0),
+      batchNumber: product.activeBatch?.batchNumber || '',
+      expiryDate: product.activeBatch?.expiryDate || undefined,
       originalPrice: regularPrice, // The base price
       loyaltyDiscount: isLoyalty ? Math.max(0, regularPrice - effectivePrice) : 0,
       quantity,
@@ -840,14 +915,70 @@ async function createSale(payload) {
     const sale = await Sale.create(salePayload);
     console.log("createSale: Sale created in DB.");
 
-    console.log("createSale: Updating branch stock...");
+    console.log("createSale: Updating branch stock and batches (FEFO)...");
     for (const item of saleItems) {
       await BranchStock.findOneAndUpdate(
         { branch: branchName, productId: item.productId },
         { $inc: { quantityInStock: -item.quantity } }
       );
+
+      // Deduct from Batches: First check if item was sold from a specific batch (e.g. manual active batch), then fallback to FEFO
+      try {
+        let remainingToDeduct = item.quantity;
+        const normalizedBranch = String(branchName).toLowerCase();
+        const isMain = ['main branch', 'main warehouse', 'main'].includes(normalizedBranch);
+        const branchQuery = isMain
+          ? { branch: { $regex: /^(main branch|main warehouse|main)$/i } }
+          : { branch: branchName };
+
+        // If the sale item specified a batchNumber, deduct from that batch first!
+        if (item.batchNumber) {
+          const targetedBatch = await Batch.findOne({
+            product: item.productId,
+            batchNumber: item.batchNumber,
+            ...branchQuery,
+            status: 'ACTIVE',
+            availableQuantity: { $gt: 0 }
+          });
+          if (targetedBatch) {
+            const deduct = Math.min(targetedBatch.availableQuantity, remainingToDeduct);
+            targetedBatch.availableQuantity -= deduct;
+            remainingToDeduct -= deduct;
+            if (targetedBatch.availableQuantity <= 0) {
+              targetedBatch.availableQuantity = 0;
+              targetedBatch.status = 'DEPLETED';
+            }
+            await targetedBatch.save();
+          }
+        }
+
+        // If any remaining quantity remains, deduct from active batches in FEFO order
+        if (remainingToDeduct > 0) {
+          const activeBatches = await Batch.find({
+            product: item.productId,
+            ...branchQuery,
+            status: 'ACTIVE',
+            availableQuantity: { $gt: 0 }
+          }).sort({ expiryDate: 1 });
+
+          for (const b of activeBatches) {
+            if (remainingToDeduct <= 0) break;
+            const deductFromThisBatch = Math.min(b.availableQuantity, remainingToDeduct);
+            b.availableQuantity -= deductFromThisBatch;
+            remainingToDeduct -= deductFromThisBatch;
+
+            if (b.availableQuantity <= 0) {
+              b.availableQuantity = 0;
+              b.status = 'DEPLETED';
+            }
+            await b.save();
+          }
+        }
+      } catch (batchErr) {
+        console.error("Error updating batch stock in FEFO:", batchErr);
+      }
     }
-    console.log("createSale: Branch stock updated.");
+    console.log("createSale: Branch stock & batches updated.");
 
     // Create Invoice if Credit or has Credit component in split
     let creditAmount = 0;
@@ -1274,6 +1405,25 @@ function getRangeStart(range) {
 async function getSalesReport(range = 'weekly', branchFilter = null, customStartDate = null, customEndDate = null) {
   const sales = await getAllSales();
   const products = await getAllProducts();
+  const todayProductSalesMap = new Map();
+  salesToday.forEach((sale) => {
+    sale.items.forEach((item) => {
+      if (!todayProductSalesMap.has(item.productId)) {
+        todayProductSalesMap.set(item.productId, {
+          productId: item.productId,
+          name: item.name,
+          quantity: 0,
+          revenue: 0,
+          image: item.image,
+          rackLabel: getRackLabel(item.rack),
+        });
+      }
+      const entry = todayProductSalesMap.get(item.productId);
+      entry.quantity += Number(item.quantity);
+      entry.revenue = formatCurrencyAmount(entry.revenue + Number(item.lineTotal));
+    });
+  });
+
   const productSalesMap = new Map();
   const validRange = ['daily', 'weekly', 'monthly', 'annual', 'custom'].includes(range) ? range : 'weekly';
 
@@ -1383,14 +1533,15 @@ async function getSalesReport(range = 'weekly', branchFilter = null, customStart
 async function getOverviewData(user, branchFilter = null, trendRange = 'monthly', customStartDate = null, customEndDate = null) {
   const activeBranch = (user && user.role !== 'super_admin') ? user.branch : branchFilter;
 
-  let [products, sales, users, allPurchases, allReturns, allCustomerInvoices, allSupplierInvoices] = await Promise.all([
+  let [products, sales, users, allPurchases, allReturns, allCustomerInvoices, allSupplierInvoices, todayShifts] = await Promise.all([
     getProducts({ branch: activeBranch }),
     getAllSales(),
     getAllUsersForLookup(),
     isDatabaseReady() ? Purchase.find().sort({ createdAt: -1 }).populate('supplier').lean() : clonePlain(memoryStore.purchases || []),
     isDatabaseReady() ? Return.find().sort({ createdAt: -1 }).lean() : clonePlain(memoryStore.returns || []),
     isDatabaseReady() ? CustomerInvoice.find().sort({ updatedAt: -1 }).populate('customerId').lean() : [],
-    isDatabaseReady() ? SupplierInvoice.find().sort({ updatedAt: -1 }).populate('supplierId').lean() : []
+    isDatabaseReady() ? SupplierInvoice.find().sort({ updatedAt: -1 }).populate('supplierId').lean() : [],
+    isDatabaseReady() ? Shift.find({ date: new Date().toISOString().split('T')[0] }).lean() : []
   ]);
 
   let activeShift = null;
@@ -1451,6 +1602,25 @@ async function getOverviewData(user, branchFilter = null, trendRange = 'monthly'
     const entry = rackSummaryMap.get(key);
     entry.items += 1;
     entry.units += Number(product.quantityInStock);
+  });
+
+  const todayProductSalesMap = new Map();
+  salesToday.forEach((sale) => {
+    sale.items.forEach((item) => {
+      if (!todayProductSalesMap.has(item.productId)) {
+        todayProductSalesMap.set(item.productId, {
+          productId: item.productId,
+          name: item.name,
+          quantity: 0,
+          revenue: 0,
+          image: item.image,
+          rackLabel: getRackLabel(item.rack),
+        });
+      }
+      const entry = todayProductSalesMap.get(item.productId);
+      entry.quantity += Number(item.quantity);
+      entry.revenue = formatCurrencyAmount(entry.revenue + Number(item.lineTotal));
+    });
   });
 
   const productSalesMap = new Map();
@@ -1640,6 +1810,48 @@ async function getOverviewData(user, branchFilter = null, trendRange = 'monthly'
 
   const totalBalance = formatCurrencyAmount(cashFromSales + supplierReturnsCash - cashToSuppliers - customerReturnsCash);
 
+  // Today Net Profit Calculation
+  // 1. Product cost lookup map from products catalog
+  const productCostMap = new Map();
+  products.forEach(p => {
+    productCostMap.set(String(p._id), Number(p.costPrice || 0));
+  });
+
+  // 2. Gross profit from today's sales: (LineTotal - (CostPrice * Qty))
+  let todayGrossProfit = 0;
+  salesToday.forEach(sale => {
+    let saleCost = 0;
+    (sale.items || []).forEach(item => {
+      const unitCost = item.costPrice !== undefined ? Number(item.costPrice) : (productCostMap.get(String(item.productId)) || 0);
+      saleCost += unitCost * Number(item.quantity || 0);
+    });
+    // Profit = Sale Total (after discounts) - Total Cost of items
+    const saleProfit = Number(sale.total || 0) - saleCost;
+    todayGrossProfit += saleProfit;
+  });
+
+  // 3. Today's drawer expenses (Lunch, Transport, etc.)
+  let relevantShifts = todayShifts || [];
+  if (activeBranch) {
+    relevantShifts = relevantShifts.filter(s => s.branch === activeBranch);
+  }
+  const todayDrawerExpenses = relevantShifts.reduce((sum, s) => {
+    const expSum = (s.expenses || []).reduce((eSum, e) => eSum + Number(e.amount || 0), 0);
+    return sum + expSum;
+  }, 0);
+
+  // 4. Net Profit = Gross Profit - Cashier Expenses
+  const todayNetProfit = formatCurrencyAmount(todayGrossProfit - todayDrawerExpenses);
+
+  const todayExpenseList = relevantShifts.flatMap(s => (s.expenses || []).map(e => ({
+    category: e.category,
+    amount: e.amount,
+    notes: e.notes,
+    time: e.time,
+    cashierName: s.cashierName || s.cashierUsername,
+    branch: s.branch
+  })));
+
   return {
     user: sanitizeUser(user),
     metrics: {
@@ -1659,6 +1871,10 @@ async function getOverviewData(user, branchFilter = null, trendRange = 'monthly'
         salesThisYear.reduce((sum, sale) => sum + Number(sale.total), 0),
       ),
       totalBalance,
+      todayNetProfit,
+      todayDrawerExpenses: formatCurrencyAmount(todayDrawerExpenses),
+      todayGrossProfit: formatCurrencyAmount(todayGrossProfit),
+      todayExpenseList,
       activeUsers: users.length,
     },
     monthlySales: branchMonthlySales,
@@ -1678,6 +1894,9 @@ async function getOverviewData(user, branchFilter = null, trendRange = 'monthly'
     topProducts: [...productSalesMap.values()]
       .sort((left, right) => right.quantity - left.quantity)
       .slice(0, 5),
+    todayTopProducts: [...todayProductSalesMap.values()]
+      .sort((left, right) => right.quantity - left.quantity)
+      .slice(0, 10),
     rackSummary: [...rackSummaryMap.values()],
   };
 }
@@ -1998,6 +2217,8 @@ module.exports = {
   getWorksheets,
   getCurrentShift,
   closeShift,
+  addShiftExpense,
+  deleteShiftExpense,
 };
 
 async function getPurchases(filters = {}) {
@@ -2005,7 +2226,11 @@ async function getPurchases(filters = {}) {
   if (isDatabaseReady()) {
     const query = {};
     if (branchFilter) query.branch = branchFilter;
-    return await Purchase.find(query).populate('supplier').populate('products.product').lean();
+    return await Purchase.find(query)
+      .populate('supplier')
+      .populate('products.product')
+      .sort({ createdAt: -1, date: -1, _id: -1 })
+      .lean();
   }
 
   let list = memoryStore.purchases;
@@ -2036,11 +2261,28 @@ async function createPurchase(payload) {
 
   const purchaseData = {
     supplier,
-    products: products.map(item => ({
-      product: item.product,
-      quantity: Number(item.quantity),
-      costPrice: Number(item.costPrice),
-    })),
+    products: products.map(item => {
+      const packQty = Number(item.packQuantity || 1);
+      const pcsPerPack = Number(item.piecesPerPack || 1);
+      const totalUnits = Number(item.quantity) || (packQty * pcsPerPack);
+      const unitCost = Number(item.costPrice);
+      const unitSelling = Number(item.sellingPrice || 0);
+
+      return {
+        product: item.product,
+        batchNumber: item.batchNumber ? String(item.batchNumber).trim() : `BAT-${Date.now().toString().slice(-6)}`,
+        expiryDate: item.expiryDate ? new Date(item.expiryDate) : new Date(Date.now() + 365*24*60*60*1000),
+        manufactureDate: item.manufactureDate ? new Date(item.manufactureDate) : undefined,
+        packType: item.packType || (pcsPerPack > 1 ? `${pcsPerPack} Pack` : 'Units'),
+        piecesPerPack: pcsPerPack,
+        packQuantity: packQty,
+        quantity: totalUnits,
+        costPrice: unitCost,
+        sellingPrice: unitSelling,
+        costPerPack: Number(item.costPerPack || (unitCost * pcsPerPack)),
+        sellingPerPack: Number(item.sellingPerPack || (unitSelling * pcsPerPack)),
+      };
+    }),
     total: Number(total),
     date: date || new Date(),
     branch: branchName,
@@ -2051,15 +2293,46 @@ async function createPurchase(payload) {
     const purchase = new Purchase(purchaseData);
     await purchase.save();
 
-    const updatePromises = products.map(async (item) => {
+    const updatePromises = purchaseData.products.map(async (item) => {
+      // 1. Update BranchStock
       await BranchStock.findOneAndUpdate(
         { branch: branchName, productId: item.product },
-        { $inc: { quantityInStock: Number(item.quantity) } },
+        { $inc: { quantityInStock: item.quantity } },
         { upsert: true, new: true }
       );
+
+      // 2. Update Product prices & stock
+      const productUpdate = {
+        latestPurchaseCost: item.costPrice,
+        costPrice: item.costPrice
+      };
+      if (item.sellingPrice > 0) {
+        productUpdate.price = item.sellingPrice;
+      }
       await Product.findByIdAndUpdate(item.product, {
-        latestPurchaseCost: Number(item.costPrice),
-        costPrice: Number(item.costPrice)
+        $set: productUpdate,
+        $inc: { quantityInStock: item.quantity }
+      });
+
+      // 3. Create or update Pharmacy Batch
+      await Batch.create({
+        product: item.product,
+        batchNumber: item.batchNumber,
+        expiryDate: item.expiryDate,
+        manufactureDate: item.manufactureDate,
+        branch: branchName,
+        packType: item.packType,
+        piecesPerPack: item.piecesPerPack,
+        initialPacks: item.packQuantity,
+        initialQuantity: item.quantity,
+        availableQuantity: item.quantity,
+        costPricePerUnit: item.costPrice,
+        sellingPricePerUnit: item.sellingPrice,
+        costPricePerPack: item.costPerPack,
+        sellingPricePerPack: item.sellingPerPack,
+        supplier: supplier,
+        purchaseRef: purchase._id,
+        status: 'ACTIVE'
       });
     });
     await Promise.all(updatePromises);
@@ -2131,6 +2404,18 @@ async function transferInventory({ sourceBranch, destBranch, products, transport
         { branch: sourceBranch, productId: item.product },
         { $inc: { quantityInStock: -Number(item.quantity) } }
       );
+
+      // If a specific Batch was chosen, deduct from Batch availableQuantity as well!
+      if (item.batchId) {
+        try {
+          const Batch = require('../models/Batch');
+          await Batch.findByIdAndUpdate(item.batchId, {
+            $inc: { availableQuantity: -Number(item.quantity) }
+          });
+        } catch (bErr) {
+          console.error('Error updating batch quantity during transfer:', bErr);
+        }
+      }
       // NOTE: Destination branch stock will ONLY be credited when confirmed/received by destination branch
     });
 
@@ -2191,7 +2476,7 @@ async function transferInventory({ sourceBranch, destBranch, products, transport
   }
 }
 
-async function receiveTripTransfer({ transferId, tripIndex, user }) {
+async function receiveTripTransfer({ transferId, tripIndex, user, decision = 'ACCEPTED', inspectionItems = [], notes = '' }) {
   if (isDatabaseReady()) {
     const transfer = await Transfer.findById(transferId);
     if (!transfer) throw createError('Transfer record not found.', 404);
@@ -2208,42 +2493,136 @@ async function receiveTripTransfer({ transferId, tripIndex, user }) {
     }
 
     const trip = transfer.transports[tripIndex];
-    if (trip.status === 'RECEIVED') {
-      throw createError('This trip has already been confirmed and received.', 400);
+    if (trip.status === 'RECEIVED' || trip.status === 'REJECTED') {
+      throw createError(`This trip has already been processed (${trip.status}).`, 400);
     }
 
-    // If trip has specific item breakdown, use those exact quantities!
-    // Otherwise fallback to proportional distribution
-    const hasTripItems = Array.isArray(trip.items) && trip.items.length > 0;
+    const isRejected = decision === 'REJECTED';
+    let totalAcceptedInTrip = 0;
+    let totalRejectedInTrip = 0;
 
-    let addStockPromises;
+    const hasTripItems = Array.isArray(trip.items) && trip.items.length > 0;
+    let addStockPromises = [];
+
     if (hasTripItems) {
-      addStockPromises = trip.items.map(async (tItem) => {
-        const qtyToAdd = Number(tItem.quantity || (Number(tItem.unitQty || 0) * Number(tItem.piecesPerUnit || 1)));
-        if (qtyToAdd > 0) {
+      addStockPromises = trip.items.map(async (tItem, itemIdx) => {
+        const itemInspection = (Array.isArray(inspectionItems) ? inspectionItems : []).find(
+          ins => String(ins.productId || ins.product) === String(tItem.product) || ins.index === itemIdx
+        ) || {};
+
+        // Find matching main transfer product for correct packaging pieces per pack
+        const mainProd = (transfer.products || []).find(p => String(p.product) === String(tItem.product));
+        const piecesPerPack = Number(mainProd?.piecesPerPack || tItem.piecesPerPack || 1);
+        const dispatchedPacks = Number(tItem.packQuantity || (Number(tItem.quantity || 0) / piecesPerPack) || 1);
+
+        if (isRejected) {
+          tItem.receivedPackQuantity = 0;
+          tItem.damagedPackQuantity = 0;
+          tItem.acceptedPackQuantity = 0;
+          tItem.acceptedQuantity = 0;
+          tItem.rejectedQuantity = Number(tItem.quantity || (dispatchedPacks * piecesPerPack));
+          totalRejectedInTrip += tItem.rejectedQuantity;
+          return;
+        }
+
+        // Custom inspected quantities
+        const arrivedPacks = itemInspection.receivedPackQuantity !== undefined
+          ? Number(itemInspection.receivedPackQuantity)
+          : dispatchedPacks;
+        const damagedPacks = itemInspection.damagedPackQuantity !== undefined
+          ? Math.max(0, Number(itemInspection.damagedPackQuantity))
+          : 0;
+
+        // Accepted packs = arrived - damaged
+        const acceptedPacks = Math.max(0, arrivedPacks - damagedPacks);
+        const acceptedUnits = acceptedPacks * piecesPerPack;
+        const rejectedUnits = Math.max(0, (dispatchedPacks * piecesPerPack) - acceptedUnits);
+
+        tItem.receivedPackQuantity = arrivedPacks;
+        tItem.damagedPackQuantity = damagedPacks;
+        tItem.acceptedPackQuantity = acceptedPacks;
+        tItem.acceptedQuantity = acceptedUnits;
+        tItem.rejectedQuantity = rejectedUnits;
+
+        totalAcceptedInTrip += acceptedUnits;
+        totalRejectedInTrip += rejectedUnits;
+
+        // Only add strictly ACCEPTED units into Destination Branch Stock
+        if (acceptedUnits > 0) {
           await BranchStock.findOneAndUpdate(
             { branch: transfer.destBranch, productId: tItem.product },
-            { $inc: { quantityInStock: Number(qtyToAdd) } },
+            { $inc: { quantityInStock: Number(acceptedUnits) } },
             { upsert: true, new: true }
           );
+
+          // If batch was tracked, create or update batch in destination branch!
+          const batchNo = tItem.batchNumber || mainProd?.batchNumber;
+          const expDate = tItem.expiryDate || mainProd?.expiryDate;
+          if (batchNo) {
+            try {
+              const Batch = require('../models/Batch');
+              let destBatch = await Batch.findOne({
+                batchNumber: batchNo,
+                product: tItem.product,
+                branch: transfer.destBranch
+              });
+
+              if (destBatch) {
+                destBatch.availableQuantity += Number(acceptedUnits);
+                destBatch.status = 'ACTIVE';
+                await destBatch.save();
+              } else {
+                await Batch.create({
+                  product: tItem.product,
+                  batchNumber: batchNo,
+                  expiryDate: expDate,
+                  branch: transfer.destBranch,
+                  packType: mainProd?.packType || tItem.packType || 'Master Carton',
+                  piecesPerPack: piecesPerPack,
+                  initialPacks: acceptedPacks,
+                  initialQuantity: acceptedUnits,
+                  availableQuantity: acceptedUnits,
+                  costPricePerUnit: mainProd?.costPricePerUnit || tItem.costPricePerUnit || 0,
+                  sellingPricePerUnit: mainProd?.sellingPricePerUnit || tItem.sellingPricePerUnit || 0,
+                  status: 'ACTIVE'
+                });
+              }
+            } catch (bDestErr) {
+              console.error('Error crediting destination batch:', bDestErr);
+            }
+          }
         }
       });
     } else {
+      // Fallback if trip didn't have discrete items
       const totalTrips = transfer.transports.length;
-      const alreadyReceivedTrips = transfer.transports.filter(t => t.status === 'RECEIVED').length;
-      const isLastTrip = (alreadyReceivedTrips + 1) >= totalTrips;
+      const alreadyProcessedTrips = transfer.transports.filter(t => t.status === 'RECEIVED' || t.status === 'REJECTED').length;
+      const isLastTrip = (alreadyProcessedTrips + 1) >= totalTrips;
 
-      addStockPromises = transfer.products.map(async (item) => {
+      addStockPromises = transfer.products.map(async (item, itemIdx) => {
         let qtyForThisTrip = Math.floor(item.quantity / totalTrips);
         if (isLastTrip) {
-          const alreadyCredited = Math.floor(item.quantity / totalTrips) * alreadyReceivedTrips;
+          const alreadyCredited = Math.floor(item.quantity / totalTrips) * alreadyProcessedTrips;
           qtyForThisTrip = item.quantity - alreadyCredited;
         }
 
-        if (qtyForThisTrip > 0) {
+        if (isRejected) {
+          totalRejectedInTrip += qtyForThisTrip;
+          return;
+        }
+
+        const itemInspection = (Array.isArray(inspectionItems) ? inspectionItems : [])[itemIdx] || {};
+        const arrivedUnits = itemInspection.receivedQuantity !== undefined ? Number(itemInspection.receivedQuantity) : qtyForThisTrip;
+        const damagedUnits = itemInspection.damagedQuantity !== undefined ? Number(itemInspection.damagedQuantity) : 0;
+        const acceptedUnits = Math.max(0, arrivedUnits - damagedUnits);
+
+        totalAcceptedInTrip += acceptedUnits;
+        totalRejectedInTrip += (qtyForThisTrip - acceptedUnits);
+
+        if (acceptedUnits > 0) {
           await BranchStock.findOneAndUpdate(
             { branch: transfer.destBranch, productId: item.product },
-            { $inc: { quantityInStock: Number(qtyForThisTrip) } },
+            { $inc: { quantityInStock: Number(acceptedUnits) } },
             { upsert: true, new: true }
           );
         }
@@ -2252,17 +2631,21 @@ async function receiveTripTransfer({ transferId, tripIndex, user }) {
 
     await Promise.all(addStockPromises);
 
-    // Mark this trip received
-    trip.status = 'RECEIVED';
+    // Mark trip inspection state
+    trip.status = isRejected ? 'REJECTED' : 'RECEIVED';
+    trip.inspectionDecision = isRejected ? 'REJECTED' : (totalRejectedInTrip > 0 ? 'PARTIAL' : 'ACCEPTED');
     trip.receivedBy = `${user.name || user.username || 'Admin'} (${user.branch || user.role})`;
     trip.receivedAt = new Date();
+    trip.receivedNotes = notes || (isRejected ? 'Rejected by destination branch' : 'Inspected & Accepted');
 
-    // Check if ALL trips are now received
-    const allTripsReceived = transfer.transports.every(t => t.status === 'RECEIVED');
-    if (allTripsReceived) {
-      transfer.status = 'RECEIVED';
+    // Check if ALL trips have been finished
+    const allTripsDone = transfer.transports.every(t => t.status === 'RECEIVED' || t.status === 'REJECTED');
+    if (allTripsDone) {
+      const anyReceived = transfer.transports.some(t => t.status === 'RECEIVED');
+      transfer.status = anyReceived ? 'RECEIVED' : 'CANCELLED';
       transfer.receivedBy = trip.receivedBy;
       transfer.receivedAt = new Date();
+      transfer.receivedNotes = notes || '';
     }
 
     await transfer.save();
@@ -2348,13 +2731,47 @@ async function receiveTransfer({ transferId, user, notes = '' }) {
       throw createError(`Only the admin of ${transfer.destBranch} can confirm receipt of this stock.`, 403);
     }
 
-    // Now increment the stock in destination branch
+    // Now increment the stock in destination branch and create/credit Batches
     const addStockPromises = transfer.products.map(async (item) => {
       await BranchStock.findOneAndUpdate(
         { branch: transfer.destBranch, productId: item.product },
         { $inc: { quantityInStock: Number(item.quantity) } },
         { upsert: true, new: true }
       );
+
+      // Create or increment batch in destination branch
+      if (item.batchNumber) {
+        try {
+          let destBatch = await Batch.findOne({
+            batchNumber: item.batchNumber,
+            product: item.product,
+            branch: transfer.destBranch
+          });
+
+          if (destBatch) {
+            destBatch.availableQuantity += Number(item.quantity);
+            destBatch.status = 'ACTIVE';
+            await destBatch.save();
+          } else {
+            await Batch.create({
+              product: item.product,
+              batchNumber: item.batchNumber,
+              expiryDate: item.expiryDate || new Date(),
+              branch: transfer.destBranch,
+              packType: item.packType || 'Packs',
+              piecesPerPack: Number(item.piecesPerPack || 1),
+              initialPacks: Number(item.packQuantity || 1),
+              initialQuantity: Number(item.quantity),
+              availableQuantity: Number(item.quantity),
+              costPricePerUnit: Number(item.costPricePerUnit || item.costPrice || 0),
+              sellingPricePerUnit: Number(item.sellingPricePerUnit || item.sellingPrice || 0),
+              status: 'ACTIVE'
+            });
+          }
+        } catch (bErr) {
+          console.error('Error creating batch in destination branch on receiveTransfer:', bErr);
+        }
+      }
     });
 
     await Promise.all(addStockPromises);
@@ -2902,11 +3319,16 @@ async function closeShift(cashierId, endTime = null) {
     }
   });
 
+  const cashOutTotal = (shift.expenses || []).reduce((sum, e) => sum + Number(e.amount || 0), 0);
+  const netCash = Math.max(0, cashTotal - cashOutTotal);
+
   shift.totals = {
     cash: formatCurrencyAmount(cashTotal),
     card: formatCurrencyAmount(cardTotal),
     credit: formatCurrencyAmount(creditTotal),
-    total: formatCurrencyAmount(totalSales)
+    total: formatCurrencyAmount(totalSales),
+    cashOutTotal: formatCurrencyAmount(cashOutTotal),
+    netCash: formatCurrencyAmount(netCash)
   };
   shift.salesCount = sales.length;
   shift.endTime = finalEndTime;
@@ -2914,6 +3336,51 @@ async function closeShift(cashierId, endTime = null) {
 
   await shift.save();
 
+  return shift.toObject();
+}
+
+async function addShiftExpense(cashierId, { category, amount, notes }) {
+  if (!category || !amount || Number(amount) <= 0) {
+    throw createError('Category and a valid positive amount are required.', 400);
+  }
+
+  const shift = await Shift.findOne({ cashierId, status: 'open' });
+  if (!shift) {
+    throw createError('No active open shift found for this cashier.', 400);
+  }
+
+  const expenseItem = {
+    category: String(category).trim(),
+    amount: Number(amount),
+    notes: String(notes || '').trim(),
+    time: new Date()
+  };
+
+  shift.expenses = shift.expenses || [];
+  shift.expenses.push(expenseItem);
+
+  const cashOutTotal = shift.expenses.reduce((sum, e) => sum + Number(e.amount || 0), 0);
+  if (!shift.totals) shift.totals = {};
+  shift.totals.cashOutTotal = cashOutTotal;
+  shift.totals.netCash = Math.max(0, (shift.totals.cash || 0) - cashOutTotal);
+
+  await shift.save();
+  return shift.toObject();
+}
+
+async function deleteShiftExpense(cashierId, expenseId) {
+  const shift = await Shift.findOne({ cashierId, status: 'open' });
+  if (!shift) {
+    throw createError('No active open shift found for this cashier.', 400);
+  }
+
+  shift.expenses = (shift.expenses || []).filter(e => String(e._id) !== String(expenseId));
+  const cashOutTotal = shift.expenses.reduce((sum, e) => sum + Number(e.amount || 0), 0);
+  if (!shift.totals) shift.totals = {};
+  shift.totals.cashOutTotal = cashOutTotal;
+  shift.totals.netCash = Math.max(0, (shift.totals.cash || 0) - cashOutTotal);
+
+  await shift.save();
   return shift.toObject();
 }
 

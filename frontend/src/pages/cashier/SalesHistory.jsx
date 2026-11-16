@@ -171,44 +171,33 @@ export default function SalesHistory({ api, session, onNotice, company }) {
         </div>
       </div>
 
-      {/* High Density Analytical Metrics */}
-      <div className="metric-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))' }}>
-        <div className="panel glass-panel p-5 stack gap-3 glow-on-hover">
-          <div className="between">
-            <span className="muted eyebrow x-small">Gross Revenue</span>
-            <div className="pill success-soft"><TrendingUp size={12} /></div>
-          </div>
-          <h2 className="font-strong">{formatCurrency(stats.total)}</h2>
-          <div className="progress-bar" style={{ height: '4px', background: 'var(--bg-soft)', borderRadius: '2px' }}>
-            <div style={{ width: '100%', height: '100%', background: 'var(--success)', borderRadius: '2px' }}></div>
-          </div>
-        </div>
-
+      {/* Cashier Metric Summary - Blind Handover Mode (Only Operational Metrics) */}
+      <div className="metric-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))' }}>
         <div className="panel glass-panel p-5 stack gap-3 glow-on-hover">
           <div className="between">
             <span className="muted eyebrow x-small">Bills Issued</span>
-            <div className="pill info-soft"><Layers size={12} /></div>
+            <div className="pill info-soft"><Layers size={14} /></div>
           </div>
           <h2 className="font-strong">{stats.count} Bills</h2>
-          <span className="muted x-small">Finalized Transactions</span>
+          <span className="muted x-small">Finalized Customer Transactions</span>
         </div>
 
         <div className="panel glass-panel p-5 stack gap-3 glow-on-hover">
           <div className="between">
-            <span className="muted eyebrow x-small">Cash Flow</span>
-            <Banknote size={14} className="success-text" />
+            <span className="muted eyebrow x-small">Audit Status</span>
+            <div className="pill success-soft"><TrendingUp size={14} /></div>
           </div>
-          <h2 className="font-strong" style={{ color: 'var(--success)' }}>{formatCurrency(stats.breakdown.cash)}</h2>
-          <span className="muted x-small">Physical Collections</span>
+          <h2 className="font-strong" style={{ color: 'var(--success)' }}>Active Shift</h2>
+          <span className="muted x-small">Transactions logged under Terminal ID</span>
         </div>
 
         <div className="panel glass-panel p-5 stack gap-3 glow-on-hover">
           <div className="between">
-            <span className="muted eyebrow x-small">Digital / Card</span>
-            <CreditCard size={14} className="accent-text" />
+            <span className="muted eyebrow x-small">Blind Handover Policy</span>
+            <div className="pill neutral-soft"><FileText size={14} /></div>
           </div>
-          <h2 className="font-strong" style={{ color: 'var(--accent)' }}>{formatCurrency(stats.breakdown.card + stats.breakdown.digital)}</h2>
-          <span className="muted x-small">Electronic Settlement</span>
+          <h2 className="font-strong" style={{ fontSize: '1.05rem', color: 'var(--text-soft)' }}>Blind Audit Active</h2>
+          <span className="muted x-small">Cash drawer total verified by Branch Admin</span>
         </div>
       </div>
 

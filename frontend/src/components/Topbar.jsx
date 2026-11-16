@@ -72,10 +72,12 @@ export function Topbar({ activeView, session, overview, theme, setTheme, setIsSi
             </div>
           </>
         )}
-        <div className="mini-stat panel-strong" style={{ padding: '12px 20px', borderRadius: '16px', border: '1px solid var(--border)', background: 'var(--accent-soft)' }}>
-          <span className="muted eyebrow" style={{ fontSize: '0.6rem' }}>{['admin', 'super_admin'].includes(session.user.role) ? "Today's Rev" : "My Sales"}</span>
-          <div className="font-strong" style={{ fontSize: '1.25rem', color: 'var(--accent-strong)' }}>{formatCurrency(overview?.metrics.revenueToday ?? 0)}</div>
-        </div>
+        {['admin', 'super_admin'].includes(session.user.role) && (
+          <div className="mini-stat panel-strong" style={{ padding: '12px 20px', borderRadius: '16px', border: '1px solid var(--border)', background: 'var(--accent-soft)' }}>
+            <span className="muted eyebrow" style={{ fontSize: '0.6rem' }}>Today's Rev</span>
+            <div className="font-strong" style={{ fontSize: '1.25rem', color: 'var(--accent-strong)' }}>{formatCurrency(overview?.metrics.revenueToday ?? 0)}</div>
+          </div>
+        )}
         <div 
           style={{ 
             display: 'flex', 

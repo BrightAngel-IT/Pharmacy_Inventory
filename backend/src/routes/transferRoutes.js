@@ -59,15 +59,46 @@ router.post('/', requireAuth, requireRole(['super_admin']), async (req, res, nex
 });
 
 // Destination Branch Admin (or Super Admin) confirms receipt of a specific trip (Trip 1, Trip 2, etc.)
+router.post('/:id/trips/:tripIndex/start', requireAuth, requireRole(['super_admin', 'admin']), async (req, res, next) => {
+  try {
+    const { id, tripIndex } = req.params;
+    const Transfer = require('../models/Transfer');
+    const transfer = await Transfer.findById(id);
+    if (!transfer) return res.status(404).json({ message: 'Transfer record not found.' });
+
+    const idx = parseInt(tripIndex, 10);
+    if (!transfer.transports || !transfer.transports[idx]) {
+      return res.status(404).json({ message: 'Trip not found.' });
+    }
+
+    transfer.transports[idx].status = 'IN_TRANSIT';
+    transfer.transports[idx].tripStartedAt = new Date();
+    transfer.transports[idx].tripStartedBy = `${req.user.name || req.user.username || 'Admin'} (${req.user.branch || req.user.role})`;
+    
+    // update parent transfer status as well if needed
+    transfer.status = 'IN_TRANSIT';
+
+    await transfer.save();
+    res.json({ message: `Trip ${idx + 1} marked as IN_TRANSIT (Dispatched)!`, transfer });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Destination Branch Admin (or Super Admin) confirms receipt / inspection of a specific trip (Trip 1, Trip 2, etc.)
 router.post('/:id/trips/:tripIndex/receive', requireAuth, requireRole(['super_admin', 'admin']), async (req, res, next) => {
   try {
     const { id, tripIndex } = req.params;
+    const { decision, items, notes } = req.body; // decision: 'ACCEPTED' | 'REJECTED', items: array with receivedQty, damagedQty
     const updated = await receiveTripTransfer({ 
       transferId: id, 
       tripIndex: parseInt(tripIndex, 10), 
-      user: req.user 
+      user: req.user,
+      decision,
+      inspectionItems: items,
+      notes
     });
-    res.json({ message: `Trip ${parseInt(tripIndex, 10) + 1} received and added to inventory!`, transfer: updated });
+    res.json({ message: `Trip ${parseInt(tripIndex, 10) + 1} inspection processed successfully!`, transfer: updated });
   } catch (error) {
     next(error);
   }

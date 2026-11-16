@@ -7,7 +7,11 @@ import {
   Calendar,
   Wallet,
   CreditCard,
-  Building2
+  Building2,
+  Plus,
+  Trash2,
+  ReceiptText,
+  DollarSign
 } from 'lucide-react';
 import { SectionHeading } from '../../components/SectionHeading';
 import { authConfig, formatCurrency } from '../../utils';
@@ -23,6 +27,14 @@ export function DailyWorksheet({ api, session, onNotice, company, refreshCoreDat
   const [filters, setFilters] = useState({
     date: ''
   });
+
+  const [showExpenseModal, setShowExpenseModal] = useState(false);
+  const [expenseForm, setExpenseForm] = useState({
+    category: 'Lunch',
+    amount: '',
+    notes: ''
+  });
+  const [submittingExpense, setSubmittingExpense] = useState(false);
 
   useEffect(() => {
     fetchData();
@@ -150,6 +162,39 @@ export function DailyWorksheet({ api, session, onNotice, company, refreshCoreDat
     }
   }
 
+  async function handleAddExpense(e) {
+    e.preventDefault();
+    if (!expenseForm.amount || Number(expenseForm.amount) <= 0) {
+      return onNotice({ type: 'error', text: 'Please enter a valid positive amount.' });
+    }
+
+    setSubmittingExpense(true);
+    try {
+      const res = await api.post('/shifts/expenses', expenseForm, authConfig(session.token));
+      onNotice({ type: 'success', text: 'Cash out recorded successfully!' });
+      setCurrentShift(res.data.shift);
+      setShowExpenseModal(false);
+      setExpenseForm({ category: 'Lunch', amount: '', notes: '' });
+      if (refreshCoreData) await refreshCoreData();
+    } catch (err) {
+      onNotice({ type: 'error', text: err.response?.data?.message || 'Failed to record expense.' });
+    } finally {
+      setSubmittingExpense(false);
+    }
+  }
+
+  async function handleDeleteExpense(expenseId) {
+    if (!window.confirm('Are you sure you want to remove this cash out entry?')) return;
+    try {
+      const res = await api.delete(`/shifts/expenses/${expenseId}`, authConfig(session.token));
+      onNotice({ type: 'success', text: 'Cash out removed.' });
+      setCurrentShift(res.data.shift);
+      if (refreshCoreData) await refreshCoreData();
+    } catch (err) {
+      onNotice({ type: 'error', text: err.response?.data?.message || 'Failed to delete expense.' });
+    }
+  }
+
   function handlePrintWorksheet(sheet) {
     const printWindow = window.open('', '_blank');
     if (!printWindow) return;
@@ -221,6 +266,27 @@ export function DailyWorksheet({ api, session, onNotice, company, refreshCoreDat
             <span>Total Sales:</span>
             <span>${formatCurrency(sheet.totals?.total || 0)}</span>
           </div>
+
+          ${(sheet.expenses && sheet.expenses.length > 0) || Number(sheet.totals?.cashOutTotal || 0) > 0 ? `
+            <div style="margin-top: 15px; border-top: 1px dashed #000; padding-top: 8px;">
+              <div style="font-weight: bold; margin-bottom: 6px; text-transform: uppercase;">Cash Out / Expenses Breakdown:</div>
+              ${(sheet.expenses || []).map(exp => `
+                <div class="row" style="font-size: 12px; margin-bottom: 3px;">
+                  <span>• ${exp.category} ${exp.notes ? `(${exp.notes})` : ''}:</span>
+                  <span style="color: #b91c1c;">-${formatCurrency(exp.amount || 0)}</span>
+                </div>
+              `).join('')}
+              <div class="row" style="font-weight: bold; margin-top: 6px; border-top: 1px dotted #555; padding-top: 4px;">
+                <span>Total Cash Out:</span>
+                <span style="color: #b91c1c;">-${formatCurrency(sheet.totals?.cashOutTotal || 0)}</span>
+              </div>
+            </div>
+
+            <div class="row" style="font-size: 15px; font-weight: 900; margin-top: 10px; border-top: 2px solid #000; padding-top: 6px; background: #f4f4f4;">
+              <span>Net Cash in Drawer:</span>
+              <span>${formatCurrency(sheet.totals?.netCash !== undefined ? sheet.totals.netCash : Math.max(0, (sheet.totals?.cash || 0) - (sheet.totals?.cashOutTotal || 0)))}</span>
+            </div>
+          ` : ''}
         </div>
         
         <div class="footer">
@@ -281,6 +347,53 @@ export function DailyWorksheet({ api, session, onNotice, company, refreshCoreDat
                   <span>Date</span>
                   <span style={{ color: 'var(--text)' }}>{currentShift.date}</span>
                 </div>
+              </div>
+
+              {/* Cash Out / Expenses Section during Active Shift */}
+              <div className="stack gap-3 p-4" style={{ borderRadius: '16px', background: '#fff7ed', border: '1.5px solid #ffedd5' }}>
+                <div className="between align-center">
+                  <div className="cluster gap-2">
+                    <ReceiptText size={18} style={{ color: '#ea580c' }} />
+                    <strong style={{ fontSize: '0.9rem', color: '#9a3412' }}>Drawer Cash Out / Expenses</strong>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn-outline small cluster gap-1 align-center"
+                    style={{ padding: '4px 10px', fontSize: '0.75rem', borderRadius: '8px', background: '#ffffff', borderColor: '#fdba74', color: '#c2410c', fontWeight: 700 }}
+                    onClick={() => setShowExpenseModal(true)}
+                  >
+                    <Plus size={14} /> Add Cash Out
+                  </button>
+                </div>
+
+                {currentShift.expenses && currentShift.expenses.length > 0 ? (
+                  <div className="stack gap-2 mt-1">
+                    {currentShift.expenses.map((exp, idx) => (
+                      <div key={exp._id || idx} className="between align-center p-2" style={{ background: '#ffffff', borderRadius: '8px', border: '1px solid #fed7aa', fontSize: '0.8rem' }}>
+                        <div>
+                          <strong style={{ color: '#0f172a' }}>{exp.category}</strong>
+                          {exp.notes && <span className="muted" style={{ marginLeft: '6px', fontSize: '0.75rem' }}>({exp.notes})</span>}
+                          <div style={{ fontSize: '0.68rem', color: '#9ca3af' }}>
+                            {exp.time ? new Date(exp.time).toLocaleTimeString() : ''}
+                          </div>
+                        </div>
+                        <div className="cluster gap-3 align-center">
+                          <strong style={{ color: '#dc2626', fontFamily: 'var(--font-mono)' }}>-{formatCurrency(exp.amount)}</strong>
+                        </div>
+                      </div>
+                    ))}
+                    <div className="between align-center pt-2" style={{ borderTop: '1px dashed #fdba74', fontSize: '0.85rem' }}>
+                      <span style={{ fontWeight: 700, color: '#9a3412' }}>Total Cash Out Recorded:</span>
+                      <strong style={{ color: '#dc2626', fontSize: '1rem', fontFamily: 'var(--font-mono)' }}>
+                        -{formatCurrency(currentShift.expenses.reduce((sum, e) => sum + Number(e.amount || 0), 0))}
+                      </strong>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="muted small" style={{ margin: 0, fontSize: '0.78rem', color: '#9a3412' }}>
+                    No cash taken out yet. If you took money from drawer for Lunch, Transport, or Tea, click <strong>+ Add Cash Out</strong>.
+                  </p>
+                )}
               </div>
 
               <button
@@ -346,80 +459,174 @@ export function DailyWorksheet({ api, session, onNotice, company, refreshCoreDat
           )}
         </section>
 
-        {/* History Panel */}
-        <section className="panel p-0 glass-panel overflow-hidden stack gap-0" style={{ borderRadius: '20px' }}>
-          <div className="p-6 between">
-            <div>
-              <div className="cluster gap-2 mb-2">
-                <Wallet size={18} style={{ color: 'var(--accent)' }} />
-                <span className="eyebrow">Past Worksheets</span>
-              </div>
-              <p className="muted small">Your closed daily summaries.</p>
-            </div>
-            
-            <div className="input-shell compact" style={{ borderRadius: '8px' }}>
-              <Calendar size={14} className="muted" />
-              <input 
-                type="date"
-                className="ghost-input x-small"
-                value={filters.date}
-                onChange={e => setFilters(prev => ({ ...prev, date: e.target.value }))}
-              />
-            </div>
+        {/* History Panel - Hidden for cashier to prevent seeing daily totals/balances */}
+        <section className="panel p-6 glass-panel stack gap-4" style={{ borderRadius: '20px' }}>
+          <div className="cluster gap-2 mb-2">
+            <Wallet size={18} style={{ color: 'var(--accent)' }} />
+            <span className="eyebrow">Shift & Handover Guidelines</span>
+          </div>
+          
+          <div className="p-4" style={{ borderRadius: '14px', background: 'var(--bg-soft)', border: '1px solid var(--border)' }}>
+            <h4 style={{ fontSize: '0.95rem', fontWeight: 800, color: 'var(--text)', marginBottom: '6px' }}>
+              Daily Blind Cash Handover Policy
+            </h4>
+            <p className="muted small" style={{ fontSize: '0.8rem', lineHeight: '1.5' }}>
+              At the end of your shift:
+            </p>
+            <ol className="muted small" style={{ paddingLeft: '20px', margin: '8px 0', fontSize: '0.8rem', lineHeight: '1.6' }}>
+              <li>Record all expenses (Lunch, Transport, etc.) via <strong>+ Add Cash Out</strong>.</li>
+              <li>Click <strong>End Job</strong> to close your shift session.</li>
+              <li>Count all physical cash, cards slips, and handover directly to Branch Admin / Supervisor.</li>
+              <li>Daily reconciliation and final balance verification is performed by Administration.</li>
+            </ol>
           </div>
 
-          <div className="overflow-auto" style={{ maxHeight: '600px' }}>
-            <table className="w-full professional-table">
-              <thead style={{ background: 'var(--bg-soft)', position: 'sticky', top: 0, zIndex: 10 }}>
-                <tr>
-                  <th style={{ paddingLeft: '24px' }}>Date</th>
-                  <th className="text-right">Cash</th>
-                  <th className="text-right">Total Sales</th>
-                  <th className="text-right" style={{ paddingRight: '24px' }}>Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {loading && worksheets.length === 0 ? (
-                  <tr>
-                    <td colSpan="4" className="text-center p-20">
-                      <div className="spinner accent" style={{ margin: '0 auto' }} />
-                    </td>
-                  </tr>
-                ) : worksheets.length > 0 ? (
-                  worksheets.map(sheet => (
-                    <tr key={sheet._id} className="table-row-hover">
-                      <td style={{ paddingLeft: '24px' }}>
-                        <strong>{sheet.date}</strong>
-                      </td>
-                      <td className="text-right text-success font-strong small">
-                        {formatCurrency(sheet.totals?.cash || 0)}
-                      </td>
-                      <td className="text-right font-strong small">
-                        {formatCurrency(sheet.totals?.total || 0)}
-                      </td>
-                      <td className="text-right" style={{ paddingRight: '24px' }}>
-                        <button 
-                          className="btn btn-ghost small" 
-                          onClick={() => handlePrintWorksheet(sheet)}
-                          title="Download / Print Worksheet"
-                        >
-                          <Download size={14} />
-                        </button>
-                      </td>
-                    </tr>
-                  ))
-                ) : (
-                  <tr>
-                    <td colSpan="4" className="text-center p-20 muted small">
-                      No worksheets found.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
+          <div className="p-4" style={{ borderRadius: '14px', background: '#ecfdf5', border: '1px solid #a7f3d0' }}>
+            <div className="cluster gap-2 mb-1" style={{ color: '#047857' }}>
+              <CheckCircle2 size={16} />
+              <strong style={{ fontSize: '0.85rem' }}>Secure Shift Logging Active</strong>
+            </div>
+            <p style={{ margin: 0, fontSize: '0.78rem', color: '#065f46' }}>
+              Every transaction and cash out you perform is securely audited and sent to the manager's ledger in real time.
+            </p>
           </div>
         </section>
       </div>
+
+      {/* Add Cash Out Modal */}
+      {showExpenseModal && (
+        <div 
+          className="modal-overlay animate-fade"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backdropFilter: 'blur(8px)',
+            background: 'rgba(15, 23, 42, 0.65)',
+            zIndex: 1050,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '20px'
+          }}
+        >
+          <div 
+            className="panel p-6 animate-slide"
+            style={{
+              width: '100%',
+              maxWidth: '440px',
+              background: '#ffffff',
+              borderRadius: '20px',
+              border: '1.5px solid #fed7aa',
+              boxShadow: '0 20px 40px -15px rgba(234, 88, 12, 0.3)',
+              color: '#0f172a'
+            }}
+          >
+            <div className="between align-center mb-4 pb-3" style={{ borderBottom: '1.5px solid #ffedd5' }}>
+              <div className="cluster gap-2 align-center">
+                <div style={{ background: '#ffedd5', color: '#c2410c', width: '38px', height: '38px', borderRadius: '10px', display: 'grid', placeItems: 'center' }}>
+                  <ReceiptText size={20} />
+                </div>
+                <div>
+                  <h3 style={{ fontSize: '1.1rem', fontWeight: 800, margin: 0, color: '#9a3412' }}>Record Cash Out</h3>
+                  <span className="muted" style={{ fontSize: '0.75rem', color: '#64748b' }}>Take cash from drawer for expenses</span>
+                </div>
+              </div>
+              <button 
+                type="button" 
+                className="icon-btn ghost" 
+                onClick={() => setShowExpenseModal(false)}
+                style={{ borderRadius: '50%' }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleAddExpense} className="stack gap-4">
+              <label className="field">
+                <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#334155' }}>Expense Category / Purpose:</span>
+                <select
+                  className="input"
+                  style={{ height: '42px', borderRadius: '8px', border: '1.5px solid #cbd5e1', background: '#fff', color: '#0f172a', fontWeight: 600 }}
+                  value={expenseForm.category}
+                  onChange={(e) => setExpenseForm({ ...expenseForm, category: e.target.value })}
+                >
+                  <option value="Lunch">Lunch / Meals</option>
+                  <option value="Transport">Transport / Courier / Delivery</option>
+                  <option value="Tea">Tea / Refreshments</option>
+                  <option value="Cleaning">Cleaning & Supplies</option>
+                  <option value="Stationery">Stationery & Paper Rolls</option>
+                  <option value="Emergency Cash">Emergency / Cash Draw</option>
+                  <option value="Miscellaneous">Other Miscellaneous</option>
+                </select>
+              </label>
+
+              <label className="field">
+                <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#334155' }}>Cash Out Amount (LKR):</span>
+                <div className="input-shell" style={{ height: '42px', border: '1.5px solid #cbd5e1', borderRadius: '8px', padding: '0 10px' }}>
+                  <span style={{ fontWeight: 800, color: '#c2410c', marginRight: '6px' }}>Rs.</span>
+                  <input
+                    className="ghost-input"
+                    type="number"
+                    step="any"
+                    min="1"
+                    placeholder="e.g. 500"
+                    style={{ fontSize: '1.1rem', fontWeight: 700, color: '#0f172a' }}
+                    value={expenseForm.amount}
+                    onChange={(e) => setExpenseForm({ ...expenseForm, amount: e.target.value })}
+                    required
+                    autoFocus
+                  />
+                </div>
+              </label>
+
+              <div className="cluster gap-2">
+                {[100, 200, 300, 500, 1000].map(amt => (
+                  <button
+                    key={amt}
+                    type="button"
+                    className="pill neutral-soft small"
+                    style={{ padding: '4px 10px', fontSize: '0.75rem', fontWeight: 600, border: '1px solid #fed7aa', background: '#fff7ed', color: '#c2410c' }}
+                    onClick={() => setExpenseForm({ ...expenseForm, amount: String(amt) })}
+                  >
+                    Rs. {amt}
+                  </button>
+                ))}
+              </div>
+
+              <label className="field">
+                <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#334155' }}>Remarks / Reason (Optional):</span>
+                <input
+                  className="input"
+                  type="text"
+                  placeholder="e.g. Staff lunch packet, Lorry fare..."
+                  style={{ height: '38px', borderRadius: '8px', border: '1.5px solid #cbd5e1', fontSize: '0.85rem' }}
+                  value={expenseForm.notes}
+                  onChange={(e) => setExpenseForm({ ...expenseForm, notes: e.target.value })}
+                />
+              </label>
+
+              <div className="between align-center pt-3" style={{ borderTop: '1.5px solid #f1f5f9' }}>
+                <button
+                  type="button"
+                  className="btn btn-outline"
+                  style={{ borderRadius: '8px', padding: '8px 16px' }}
+                  onClick={() => setShowExpenseModal(false)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  disabled={submittingExpense}
+                  style={{ borderRadius: '8px', padding: '8px 20px', background: '#ea580c', borderColor: '#c2410c', fontWeight: 700 }}
+                >
+                  {submittingExpense ? 'Saving...' : 'Confirm Cash Out'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

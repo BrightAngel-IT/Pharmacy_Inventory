@@ -151,39 +151,91 @@ export function ProductManager({
                   <input
                     className="input"
                     name="category"
-                    placeholder="e.g. Beverages"
+                    placeholder="e.g. Pain Relief, Antibiotics, Syrups"
                     value={productForm.category}
                     onChange={handleProductFormChange}
                     required
                   />
                 </label>
                 <label className="field">
-                  <span className="muted small font-strong uppercase" style={{ fontSize: '0.6rem' }}>Unit of Measurement</span>
+                  <span className="muted small font-strong uppercase" style={{ fontSize: '0.6rem' }}>Medicine Dispensing Form</span>
                   <select
                     className="input"
-                    name="unit"
-                    value={productForm.unit}
+                    name="itemType"
+                    value={productForm.itemType || 'TABLET_CAPSULE'}
                     onChange={handleProductFormChange}
                   >
-                    <option value="">Select a unit</option>
-                    <option value="kg">Kilogram (kg)</option>
-                    <option value="g">Gram (g)</option>
-                    <option value="ltr">Liter (ltr)</option>
-                    <option value="ml">Milliliter (ml)</option>
-                    <option value="box">Box</option>
-                    <option value="pcs">Pieces (pcs)</option>
-                    <option value="dozen">Dozen</option>
-                    <option value="pack">Pack</option>
-                    <option value="case">Case</option>
-                    <option value="bundle">Bundle</option>
-                    <option value="set">Set</option>
-                    <option value="roll">Roll</option>
-                    <option value="tube">Tube</option>
-                    <option value="meter">Meter (m)</option>
-                    <option value="sq-meter">Square Meter (m²)</option>
+                    <option value="TABLET_CAPSULE">💊 Tablets / Capsules (Divisible into Cards & Loose Tablets)</option>
+                    <option value="BOTTLE_SYRUP">🍾 Syrup / Suspension / Liquid (Bottle Only)</option>
+                    <option value="CREAM_TUBE">🧴 Cream / Ointment / Gel (Tube Only)</option>
+                    <option value="INJECTION_VIAL">💉 Injection / Vial / Ampoule</option>
+                    <option value="SURGICAL_DEVICE">🩹 Saline, Gauze, Cannula, Medical Supplies</option>
+                    <option value="GENERAL">📦 General Item (Sold as Single Unit)</option>
                   </select>
                 </label>
               </div>
+
+              {/* Conditional Packaging Hierarchy for Tablets/Capsules */}
+              {productForm.itemType === 'TABLET_CAPSULE' && (
+                <div className="stack gap-3 p-3 rounded" style={{ background: 'var(--accent-soft)', border: '1px solid var(--accent)' }}>
+                  <div className="cluster gap-2 align-center">
+                    <span style={{ fontSize: '1.2rem' }}>💊</span>
+                    <strong style={{ fontSize: '0.85rem' }}>Packaging Hierarchy (Master Carton ➔ Small Box ➔ Card ➔ Tablet)</strong>
+                  </div>
+                  <span className="x-small muted">
+                    Set standard packaging sizes. Wholesale purchases are calculated in Master Cartons, while POS cashiers can sell as Single Tablets, Cards, or Boxes.
+                  </span>
+
+                  <div className="grid-3 gap-3">
+                    <label className="field">
+                      <span className="small font-bold">1. Tabs per Card:</span>
+                      <input
+                        type="number"
+                        min="1"
+                        className="input compact font-strong text-center"
+                        name="tabletsPerCard"
+                        placeholder="e.g. 12"
+                        value={productForm.tabletsPerCard || '12'}
+                        onChange={handleProductFormChange}
+                        required
+                      />
+                      <span className="x-small muted">Tablets in 1 Strip</span>
+                    </label>
+
+                    <label className="field">
+                      <span className="small font-bold">2. Cards per Small Box:</span>
+                      <input
+                        type="number"
+                        min="1"
+                        className="input compact font-strong text-center"
+                        name="cardsPerBox"
+                        placeholder="e.g. 10"
+                        value={productForm.cardsPerBox || '10'}
+                        onChange={handleProductFormChange}
+                        required
+                      />
+                      <span className="x-small muted font-mono">= {(Number(productForm.tabletsPerCard || 12) * Number(productForm.cardsPerBox || 10))} tabs/box</span>
+                    </label>
+
+                    <label className="field">
+                      <span className="small font-bold">3. Boxes per Master Carton:</span>
+                      <input
+                        type="number"
+                        min="1"
+                        className="input compact font-strong text-center"
+                        name="boxesPerCarton"
+                        placeholder="e.g. 20"
+                        value={productForm.boxesPerCarton || '20'}
+                        onChange={handleProductFormChange}
+                        required
+                      />
+                      <span className="x-small text-accent font-bold font-mono">
+                        = {(Number(productForm.tabletsPerCard || 12) * Number(productForm.cardsPerBox || 10) * Number(productForm.boxesPerCarton || 20))} tabs/carton
+                      </span>
+                    </label>
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="stack gap-3 pt-3" style={{ borderTop: '1px solid var(--border)', marginTop: '0.5rem' }}>
@@ -253,45 +305,44 @@ export function ProductManager({
             </label>
           </div>
 
-          <div className="panel p-4 glass-panel stack gap-4" style={{ borderRadius: '16px' }}>
-            <div className="cluster gap-2">
-              <DollarSign size={16} className="accent-text" />
-              <span className="eyebrow" style={{ fontSize: '0.65rem' }}>Pricing & Stock</span>
+          {/* Pricing & Stock disabled/hidden in Master Register */}
+          <div className="panel p-4 glass-panel stack gap-3" style={{ borderRadius: '16px', opacity: 0.75, background: 'var(--bg-soft)' }}>
+            <div className="cluster gap-2 align-center">
+              <DollarSign size={16} className="muted" />
+              <span className="eyebrow" style={{ fontSize: '0.65rem' }}>Pricing & Stock (Batch Managed)</span>
             </div>
 
-            <div className="grid-1 gap-4">
-              <label className="field">
-                <span className="muted small font-strong uppercase" style={{ fontSize: '0.6rem' }}>Price</span>
-                <div className="input-shell compact" style={{ border: '1px solid var(--accent-soft)', borderRadius: '10px' }}>
-                  <span className="accent-text x-small">$</span>
-                  <input className="ghost-input font-strong small accent-text" type="number" name="price" value={productForm.price} onChange={handleProductFormChange} required />
-                </div>
-              </label>
-            </div>
-
-            <div className="grid-2 gap-4" style={{ marginTop: '8px' }}>
-              <label className="field">
-                <span className="muted small font-strong uppercase" style={{ fontSize: '0.6rem' }}>Loyalty Selling Price</span>
-                <div className="input-shell compact" style={{ borderRadius: '10px' }}>
-                  <span className="muted x-small">$</span>
-                  <input className="ghost-input font-strong small" type="number" name="loyaltyDiscount" value={productForm.loyaltyDiscount} onChange={handleProductFormChange} />
-                </div>
-                <p className="muted x-small" style={{ marginTop: '4px' }}>Price used when the loyalty card is scanned.</p>
-              </label>
-              <div />
+            <div className="p-3 rounded border-dashed" style={{ background: 'var(--bg-card)' }}>
+              <p className="x-small muted" style={{ margin: 0, lineHeight: 1.5 }}>
+                ℹ️ <strong>Stock & Pricing are automatically managed via Purchases & Batches.</strong><br />
+                Single tablet cost, selling price, and stock levels will be populated dynamically as you record Procurement Purchases.
+              </p>
             </div>
 
             <div className="grid-2 gap-4">
               <label className="field">
-                <span className="muted small font-strong uppercase" style={{ fontSize: '0.6rem' }}>Stock</span>
-                <input className="input small font-strong" type="number" name="quantityInStock" value={productForm.quantityInStock} onChange={handleProductFormChange} required />
+                <span className="muted small font-strong uppercase" style={{ fontSize: '0.6rem' }}>Min Alert Level</span>
+                <input 
+                  className="input small font-strong" 
+                  type="number" 
+                  name="reorderLevel" 
+                  value={productForm.reorderLevel} 
+                  onChange={handleProductFormChange} 
+                  placeholder="Min pieces"
+                />
               </label>
+
               <label className="field">
-                <span className="muted small font-strong uppercase" style={{ fontSize: '0.6rem' }}>Min</span>
-                <input className="input small font-strong" type="number" name="reorderLevel" value={productForm.reorderLevel} onChange={handleProductFormChange} />
+                <span className="muted small font-strong uppercase" style={{ fontSize: '0.6rem' }}>Current Master Stock</span>
+                <input 
+                  className="input small font-strong" 
+                  type="number" 
+                  value={productForm.quantityInStock || 0} 
+                  disabled 
+                  style={{ background: 'var(--bg-soft)', cursor: 'not-allowed' }}
+                />
               </label>
             </div>
-
           </div>
 
           <button

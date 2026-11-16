@@ -22,12 +22,17 @@ import {
   CreditCard,
   RefreshCcw,
   X,
-  Zap
+  Zap,
+  Eye,
+  Wallet,
+  ReceiptText,
+  Printer,
+  Download
 } from 'lucide-react'
 import { ResponsiveContainer, BarChart, Bar, CartesianGrid, XAxis, YAxis, Tooltip } from 'recharts'
 import { MetricCard } from '../../components/MetricCard'
 import { SectionHeading } from '../../components/SectionHeading'
-import { formatCurrency, formatDate, authConfig } from '../../utils'
+import { formatCurrency, formatDate, authConfig, exportToCSV } from '../../utils'
 
 export function SuperAdminDashboard({ api, session }) {
   const navigate = useNavigate()
@@ -39,6 +44,110 @@ export function SuperAdminDashboard({ api, session }) {
   const [trendRange, setTrendRange] = useState('monthly')
   const [customDates, setCustomDates] = useState({ start: '', end: '' })
   const [selectedBranch, setSelectedBranch] = useState('')
+  const [showProfitModal, setShowProfitModal] = useState(false)
+
+  const handleExportProfitCSV = () => {
+    const today = new Date().toISOString().split('T')[0];
+    const data = [
+      { Metric: "Date", Value: today },
+      { Metric: "Scope", Value: selectedBranch || "Consolidated (All Branches)" },
+      { Metric: "Total Sales Revenue", Value: (overview?.metrics.revenueToday ?? 0).toFixed(2) },
+      { Metric: "Cost of Goods Sold (COGS)", Value: (Math.max(0, (overview?.metrics.revenueToday ?? 0) - (overview?.metrics.todayGrossProfit ?? 0))).toFixed(2) },
+      { Metric: "Gross Profit", Value: (overview?.metrics.todayGrossProfit ?? 0).toFixed(2) },
+      { Metric: "Cashier Drawer Expenses", Value: (overview?.metrics.todayDrawerExpenses ?? 0).toFixed(2) },
+      { Metric: "Today Net Profit", Value: (overview?.metrics.todayNetProfit ?? 0).toFixed(2) },
+    ];
+    exportToCSV(data, `Corporate_Net_Profit_Audit_${today}`);
+  };
+
+  const handlePrintProfitAudit = () => {
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) return;
+    const today = new Date().toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+    const cogs = Math.max(0, (overview?.metrics.revenueToday ?? 0) - (overview?.metrics.todayGrossProfit ?? 0));
+    
+    printWindow.document.write(`
+      <html>
+        <head>
+          <title>Today Net Profit Audit - ${today}</title>
+          <style>
+            body { font-family: 'Segoe UI', Arial, sans-serif; padding: 40px; color: #1e293b; }
+            .header { text-align: center; border-bottom: 2px solid #0f172a; padding-bottom: 15px; margin-bottom: 25px; }
+            .title { font-size: 24px; font-weight: 800; margin: 0; }
+            .subtitle { font-size: 14px; color: #64748b; margin-top: 5px; }
+            .kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin-bottom: 30px; }
+            .kpi-card { border: 1px solid #cbd5e1; padding: 15px; border-radius: 8px; text-align: center; background: #f8fafc; }
+            .kpi-label { font-size: 11px; text-transform: uppercase; font-weight: 700; color: #64748b; }
+            .kpi-value { font-size: 20px; font-weight: 800; margin-top: 5px; font-family: monospace; }
+            .table-section { margin-top: 25px; }
+            table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px; }
+            th, td { border: 1px solid #cbd5e1; padding: 10px; text-align: left; }
+            th { background: #f1f5f9; font-weight: 700; }
+            .total-box { margin-top: 30px; padding: 20px; border: 2px solid #0f172a; border-radius: 8px; background: #f8fafc; }
+            .row { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 14px; }
+            .grand-profit { font-size: 22px; font-weight: 800; color: #10b981; border-top: 2px solid #0f172a; padding-top: 10px; margin-top: 10px; }
+            @media print { body { padding: 20px; } }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <h1 class="title">Corporate Net Profit & Performance Audit</h1>
+            <p class="subtitle">${today} · ${selectedBranch || 'All Branches Consolidated'}</p>
+          </div>
+
+          <div class="kpi-grid">
+            <div class="kpi-card">
+              <div class="kpi-label">Sales Revenue</div>
+              <div class="kpi-value">${formatCurrency(overview?.metrics.revenueToday ?? 0)}</div>
+            </div>
+            <div class="kpi-card">
+              <div class="kpi-label">Total COGS (Cost)</div>
+              <div class="kpi-value" style="color: #dc2626;">-${formatCurrency(cogs)}</div>
+            </div>
+            <div class="kpi-card">
+              <div class="kpi-label">Drawer Expenses</div>
+              <div class="kpi-value" style="color: #ea580c;">-${formatCurrency(overview?.metrics.todayDrawerExpenses ?? 0)}</div>
+            </div>
+            <div class="kpi-card" style="border: 2px solid #10b981; background: #ecfdf5;">
+              <div class="kpi-label" style="color: #047857;">Net Profit</div>
+              <div class="kpi-value" style="color: #047857;">${formatCurrency(overview?.metrics.todayNetProfit ?? 0)}</div>
+            </div>
+          </div>
+
+          <div class="total-box">
+            <div class="row">
+              <span>Today's Total Gross Billings:</span>
+              <strong style="font-family: monospace;">${formatCurrency(overview?.metrics.revenueToday ?? 0)}</strong>
+            </div>
+            <div class="row" style="color: #dc2626;">
+              <span>Less Wholesale Cost of Goods Sold (COGS):</span>
+              <strong style="font-family: monospace;">-${formatCurrency(cogs)}</strong>
+            </div>
+            <div class="row" style="border-top: 1px dashed #94a3b8; padding-top: 6px;">
+              <span>Gross Product Margin (Profit):</span>
+              <strong style="font-family: monospace;">${formatCurrency(overview?.metrics.todayGrossProfit ?? 0)}</strong>
+            </div>
+            <div class="row" style="color: #ea580c;">
+              <span>Less Petty Cash / Drawer Expenses:</span>
+              <strong style="font-family: monospace;">-${formatCurrency(overview?.metrics.todayDrawerExpenses ?? 0)}</strong>
+            </div>
+            <div class="row grand-profit">
+              <span>FINAL NET PROFIT:</span>
+              <span style="font-family: monospace;">${formatCurrency(overview?.metrics.todayNetProfit ?? 0)}</span>
+            </div>
+          </div>
+
+          <script>
+            window.onload = function() {
+              window.focus();
+              window.print();
+            };
+          </script>
+        </body>
+      </html>
+    `);
+    printWindow.document.close();
+  };
 
   useEffect(() => {
     async function fetchData() {
@@ -102,12 +211,17 @@ export function SuperAdminDashboard({ api, session }) {
           value={formatCurrency(overview?.metrics.inventoryValue ?? 0)}
           helper={`Across ${overview?.metrics.totalProducts ?? 0} SKUs`}
         />
-        <MetricCard
-          icon={Zap}
-          title={selectedBranch ? "Branch Balance" : "Consolidated Balance"}
-          value={formatCurrency(overview?.metrics.totalBalance ?? 0)}
-          helper={selectedBranch ? "Net cash position for branch" : "Net cash position across all branches"}
-        />
+        <div onClick={() => setShowProfitModal(true)} style={{ cursor: 'pointer' }}>
+          <MetricCard
+            icon={Zap}
+            title={selectedBranch ? "Today Net Profit" : "Consolidated Net Profit"}
+            value={formatCurrency(overview?.metrics.todayNetProfit ?? 0)}
+            helper="Earnings after costs & expenses"
+            accent="#10b981"
+            actionIcon={Eye}
+            onActionClick={() => setShowProfitModal(true)}
+          />
+        </div>
         <MetricCard
           icon={Building2}
           title="Active Branches"
@@ -516,6 +630,160 @@ export function SuperAdminDashboard({ api, session }) {
                   ))}
                 </tbody>
               </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Today Net Profit Audit Modal (Wide Detailed View) */}
+      {showProfitModal && (
+        <div className="modal-overlay animate-fade" onClick={() => setShowProfitModal(false)} style={{ position: 'fixed', inset: 0, backdropFilter: 'blur(12px)', zIndex: 1000, display: 'grid', placeItems: 'center', padding: '16px', background: 'rgba(0,0,0,0.6)' }}>
+          <div className="modal-content panel glass-panel p-6 animate-fade-up" onClick={e => e.stopPropagation()} style={{ maxWidth: '1240px', width: '96vw', height: '94vh', display: 'flex', flexDirection: 'column', borderRadius: '24px', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.5)' }}>
+            <div className="between align-center mb-4 pb-3 border-b" style={{ borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
+              <div className="cluster gap-3">
+                <div style={{ width: '44px', height: '44px', borderRadius: '12px', background: 'rgba(16, 185, 129, 0.15)', color: 'var(--success)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <TrendingUp size={24} />
+                </div>
+                <div>
+                  <h2 style={{ margin: 0, fontSize: '1.4rem', fontWeight: 800 }}>
+                    {selectedBranch ? `${selectedBranch} - Today's Net Profit & Performance Audit` : "Today's Corporate Net Profit & Performance Audit"}
+                  </h2>
+                  <p className="muted small" style={{ margin: 0 }}>Full financial audit stream for {new Date().toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</p>
+                </div>
+              </div>
+              <div className="cluster gap-2">
+                <button
+                  type="button"
+                  className="btn btn-secondary cluster gap-2 align-center"
+                  style={{ padding: '8px 16px', borderRadius: '10px', fontSize: '0.85rem' }}
+                  onClick={handleExportProfitCSV}
+                  title="Export audit summary to CSV"
+                >
+                  <Download size={16} />
+                  <span>Export CSV</span>
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary cluster gap-2 align-center"
+                  style={{ padding: '8px 16px', borderRadius: '10px', fontSize: '0.85rem' }}
+                  onClick={handlePrintProfitAudit}
+                  title="Print audit statement"
+                >
+                  <Printer size={16} />
+                  <span>Print Audit</span>
+                </button>
+                <button className="icon-btn" onClick={() => setShowProfitModal(false)}><X size={20} /></button>
+              </div>
+            </div>
+
+            {/* Scrollable Body Content */}
+            <div className="stack gap-4" style={{ flex: 1, overflowY: 'auto', paddingRight: '6px' }}>
+              {/* Top 4 KPI Highlights */}
+              <div className="grid-4 gap-3">
+                <div className="panel p-4 stack gap-1" style={{ borderRadius: '14px', background: 'var(--bg-soft)', border: '1px solid var(--border)' }}>
+                  <span className="eyebrow muted x-small">Today Revenue (Sales)</span>
+                  <strong className="h3 font-mono text-accent">{formatCurrency(overview?.metrics.revenueToday ?? 0)}</strong>
+                  <span className="x-small muted">{overview?.metrics.totalOrdersToday ?? 0} Invoices billed</span>
+                </div>
+                <div className="panel p-4 stack gap-1" style={{ borderRadius: '14px', background: 'var(--bg-soft)', border: '1px solid var(--border)' }}>
+                  <span className="eyebrow muted x-small">Total COGS (Wholesale Cost)</span>
+                  <strong className="h3 font-mono text-danger">-{formatCurrency(Math.max(0, (overview?.metrics.revenueToday ?? 0) - (overview?.metrics.todayGrossProfit ?? 0)))}</strong>
+                  <span className="x-small muted">Wholesale purchase cost of items sold</span>
+                </div>
+                <div className="panel p-4 stack gap-1" style={{ borderRadius: '14px', background: 'var(--bg-soft)', border: '1px solid var(--border)' }}>
+                  <span className="eyebrow muted x-small">Drawer Expenses (Petty Cash)</span>
+                  <strong className="h3 font-mono text-warning">-{formatCurrency(overview?.metrics.todayDrawerExpenses ?? 0)}</strong>
+                  <span className="x-small muted">Lunch, Transport, etc. taken from drawer</span>
+                </div>
+                <div className="panel p-4 stack gap-1" style={{ borderRadius: '14px', background: 'rgba(16, 185, 129, 0.12)', border: '2px solid var(--success)' }}>
+                  <span className="eyebrow x-small font-bold" style={{ color: 'var(--success)' }}>Today Net Profit</span>
+                  <strong className="h2 font-mono" style={{ color: (overview?.metrics.todayNetProfit ?? 0) >= 0 ? 'var(--success)' : 'var(--danger)' }}>
+                    {formatCurrency(overview?.metrics.todayNetProfit ?? 0)}
+                  </strong>
+                  <span className="x-small muted">Final pure earnings in hand today</span>
+                </div>
+              </div>
+
+              {/* Split Breakdown Tables */}
+              <div className="grid-2 gap-4" style={{ gridTemplateColumns: '1.2fr 1fr' }}>
+                {/* Product Profitability */}
+                <div className="panel p-4 stack gap-3" style={{ borderRadius: '14px', background: 'var(--bg-soft)', border: '1px solid var(--border)' }}>
+                  <div className="between align-center">
+                    <strong className="small font-bold uppercase tracking-wider">Top Velocity Sold Items (Today)</strong>
+                    <span className="badge neutral x-small font-mono">{(overview?.todayTopProducts || []).length} items</span>
+                  </div>
+                  <div className="stack gap-2 overflow-auto" style={{ maxHeight: '320px' }}>
+                    {(!overview?.todayTopProducts || overview?.todayTopProducts.length === 0) ? (
+                      <div className="p-5 text-center muted small">No product sales processed yet today.</div>
+                    ) : (
+                      overview.todayTopProducts.map(item => (
+                        <div key={item.productId} className="between align-center p-3 rounded glow-on-hover" style={{ background: 'var(--panel)', border: '1px solid var(--border)', fontSize: '0.85rem' }}>
+                          <div>
+                            <strong style={{ fontSize: '0.9rem' }}>{item.name}</strong>
+                            <div className="muted x-small font-mono mt-1">Quantity Sold: {item.quantity} units</div>
+                          </div>
+                          <div className="text-right">
+                            <span className="x-small muted block">Sales Value</span>
+                            <strong className="font-mono text-accent" style={{ fontSize: '1rem' }}>{formatCurrency(item.revenue)}</strong>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+
+                {/* Drawer Cash Out / Expenses Breakdown */}
+                <div className="panel p-4 stack gap-3" style={{ borderRadius: '14px', background: 'var(--bg-soft)', border: '1px solid var(--border)' }}>
+                  <div className="between align-center">
+                    <strong className="small font-bold uppercase tracking-wider" style={{ color: '#b45309' }}>Cash Out / Drawer Expenses</strong>
+                    <span className="badge warning x-small font-mono">{(overview?.metrics.todayExpenseList || []).length} items</span>
+                  </div>
+                  <div className="stack gap-2 overflow-auto" style={{ maxHeight: '320px' }}>
+                    {(!overview?.metrics.todayExpenseList || overview?.metrics.todayExpenseList.length === 0) ? (
+                      <div className="p-5 text-center muted small">No cash taken out from drawer today.</div>
+                    ) : (
+                      overview.metrics.todayExpenseList.map((exp, idx) => (
+                        <div key={idx} className="between align-center p-3 rounded glow-on-hover" style={{ background: 'var(--panel)', border: '1px solid var(--border)', fontSize: '0.85rem' }}>
+                          <div>
+                            <strong style={{ color: 'var(--text)', fontSize: '0.9rem' }}>{exp.category}</strong>
+                            {exp.notes && <span className="muted x-small ml-1 font-bold">({exp.notes})</span>}
+                            <div className="muted x-small mt-1">{exp.branch ? `${exp.branch} · ` : ''}{exp.cashierName ? `Cashier: ${exp.cashierName}` : ''} {exp.time ? `· Time: ${new Date(exp.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}</div>
+                          </div>
+                          <strong className="font-mono text-danger" style={{ fontSize: '1.05rem' }}>-{formatCurrency(exp.amount)}</strong>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Bottom calculation summary bar */}
+              <div className="panel-strong p-4 between align-center" style={{ borderRadius: '14px', background: 'var(--panel)', border: '1px solid var(--border)' }}>
+                <div>
+                  <span className="x-small muted font-bold uppercase tracking-wider">Accounting Formula</span>
+                  <p className="small muted m-0">
+                    <strong>Net Profit</strong> = (Today's Total Sales Revenue: {formatCurrency(overview?.metrics.revenueToday ?? 0)}) 
+                    − (Wholesale COGS: {formatCurrency(Math.max(0, (overview?.metrics.revenueToday ?? 0) - (overview?.metrics.todayGrossProfit ?? 0)))}) 
+                    − (Drawer Cash Out: {formatCurrency(overview?.metrics.todayDrawerExpenses ?? 0)})
+                  </p>
+                </div>
+                <div className="text-right">
+                  <span className="x-small muted font-bold uppercase">Today's Net Pure Profit</span>
+                  <h2 className="font-mono m-0" style={{ color: (overview?.metrics.todayNetProfit ?? 0) >= 0 ? 'var(--success)' : 'var(--danger)' }}>
+                    {formatCurrency(overview?.metrics.todayNetProfit ?? 0)}
+                  </h2>
+                </div>
+              </div>
+            </div>
+
+            {/* Fixed Footer Bar */}
+            <div className="between align-center pt-3 border-t mt-3" style={{ borderTop: '1px solid var(--border)', flexShrink: 0 }}>
+              <span className="small muted">
+                🔒 System Auto-Reset: Clears to <strong>LKR 0.00</strong> daily at midnight. Historical audits saved under Sales Reports.
+              </span>
+              <button className="btn btn-primary" onClick={() => setShowProfitModal(false)} style={{ padding: '10px 32px', borderRadius: '12px', fontWeight: 700 }}>
+                Close Window
+              </button>
             </div>
           </div>
         </div>

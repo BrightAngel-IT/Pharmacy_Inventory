@@ -12,6 +12,7 @@ const branchStockSchema = new mongoose.Schema(
     productId: { type: mongoose.Schema.Types.ObjectId, ref: 'Product', required: true },
     quantityInStock: { type: Number, required: true, default: 0, min: 0 },
     reorderLevel: { type: Number, required: true, default: 0, min: 0 },
+    manualActiveBatchId: { type: mongoose.Schema.Types.ObjectId, ref: 'Batch' },
     rack: {
       rowNumber: { type: Number, required: true, default: 1, min: 1 },
       columnNumber: { type: Number, required: true, default: 1, min: 1 },

@@ -125,6 +125,27 @@ export function DailyWorksheets({ api, session, onNotice, company }) {
             <span>Total Sales:</span>
             <span>${formatCurrency(sheet.totals?.total || 0)}</span>
           </div>
+
+          ${(sheet.expenses && sheet.expenses.length > 0) || Number(sheet.totals?.cashOutTotal || 0) > 0 ? `
+            <div style="margin-top: 15px; border-top: 1px dashed #000; padding-top: 8px;">
+              <div style="font-weight: bold; margin-bottom: 6px; text-transform: uppercase;">Cash Out / Expenses Breakdown:</div>
+              ${(sheet.expenses || []).map(exp => `
+                <div class="row" style="font-size: 12px; margin-bottom: 3px;">
+                  <span>• ${exp.category} ${exp.notes ? `(${exp.notes})` : ''}:</span>
+                  <span style="color: #b91c1c;">-${formatCurrency(exp.amount || 0)}</span>
+                </div>
+              `).join('')}
+              <div class="row" style="font-weight: bold; margin-top: 6px; border-top: 1px dotted #555; padding-top: 4px;">
+                <span>Total Cash Out:</span>
+                <span style="color: #b91c1c;">-${formatCurrency(sheet.totals?.cashOutTotal || 0)}</span>
+              </div>
+            </div>
+
+            <div class="row" style="font-size: 15px; font-weight: 900; margin-top: 10px; border-top: 2px solid #000; padding-top: 6px; background: #f4f4f4;">
+              <span>Net Cash in Drawer:</span>
+              <span>${formatCurrency(sheet.totals?.netCash !== undefined ? sheet.totals.netCash : Math.max(0, (sheet.totals?.cash || 0) - (sheet.totals?.cashOutTotal || 0)))}</span>
+            </div>
+          ` : ''}
         </div>
         
         <div class="footer">
@@ -214,7 +235,9 @@ export function DailyWorksheets({ api, session, onNotice, company }) {
                 <th style={{ paddingLeft: '24px' }}>Date</th>
                 <th>Cashier</th>
                 <th>Branch</th>
-                <th className="text-right">Cash</th>
+                <th className="text-right">Cash In</th>
+                <th className="text-right">Cash Out</th>
+                <th className="text-right">Net Drawer</th>
                 <th className="text-right">Card</th>
                 <th className="text-right">Credit</th>
                 <th className="text-right">Total</th>
@@ -224,7 +247,7 @@ export function DailyWorksheets({ api, session, onNotice, company }) {
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan="8" className="text-center p-20">
+                  <td colSpan="10" className="text-center p-20">
                     <div className="spinner accent" style={{ margin: '0 auto' }} />
                   </td>
                 </tr>
@@ -243,6 +266,12 @@ export function DailyWorksheets({ api, session, onNotice, company }) {
                     <td className="muted small">{sheet.branch}</td>
                     <td className="text-right font-strong small text-success">
                       {formatCurrency(sheet.totals?.cash || 0)}
+                    </td>
+                    <td className="text-right font-strong small text-danger">
+                      {sheet.totals?.cashOutTotal > 0 ? `-${formatCurrency(sheet.totals.cashOutTotal)}` : '-'}
+                    </td>
+                    <td className="text-right font-strong small" style={{ color: '#0f172a' }}>
+                      {formatCurrency(sheet.totals?.netCash !== undefined ? sheet.totals.netCash : Math.max(0, (sheet.totals?.cash || 0) - (sheet.totals?.cashOutTotal || 0)))}
                     </td>
                     <td className="text-right font-strong small text-accent">
                       {formatCurrency(sheet.totals?.card || 0)}
@@ -266,7 +295,7 @@ export function DailyWorksheets({ api, session, onNotice, company }) {
                 ))
               ) : (
                 <tr>
-                  <td colSpan="8" className="text-center p-20 muted small">
+                  <td colSpan="10" className="text-center p-20 muted small">
                     No worksheets found for the selected filters.
                   </td>
                 </tr>

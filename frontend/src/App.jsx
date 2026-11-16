@@ -95,6 +95,13 @@ const emptyProductForm = {
   category: '',
   description: '',
   unit: 'pcs',
+  itemType: 'TABLET_CAPSULE', // TABLET_CAPSULE, BOTTLE_SYRUP, CREAM_TUBE, INJECTION_VIAL, SURGICAL_DEVICE, GENERAL
+  tabletsPerCard: '12',
+  cardsPerBox: '10',
+  boxesPerCarton: '20',
+  defaultPackType: 'Carton', // Pack, Bottle, Box, Strip, Tube, Vial, Set, Loose
+  piecesPerPack: '100',
+  volumeOrWeight: '',
   price: '0',
   costPrice: '0',
   loyaltyDiscount: '0',
@@ -191,6 +198,7 @@ function App() {
     loyaltyCard: '',
     paymentMethod: 'cash',
     discount: '0',
+    discountType: 'fixed', // default to Rs (fixed) first
     returnDays: 7,
     notes: '',
     splitCash: '',
@@ -385,8 +393,10 @@ function App() {
     }, 0),
   )
   const discountValue = Number(checkoutForm.discount || 0)
-  const discountAmount = roundCurrency(cartSubtotal * (discountValue / 100))
-  const cartTotal = roundCurrency(cartSubtotal - discountAmount)
+  const discountAmount = checkoutForm.discountType === 'fixed'
+    ? roundCurrency(Math.min(cartSubtotal, Math.max(0, discountValue)))
+    : roundCurrency(cartSubtotal * (Math.max(0, Math.min(100, discountValue)) / 100))
+  const cartTotal = roundCurrency(Math.max(0, cartSubtotal - discountAmount))
 
   useEffect(() => {
     setCart(currentCart => currentCart.map(item => {
@@ -576,6 +586,10 @@ function App() {
           rackLabel: product.rackLabel,
           available: product.quantityInStock,
           quantity: 1,
+          itemType: product.itemType || 'TABLET_CAPSULE',
+          tabletsPerCard: Number(product.tabletsPerCard || 12),
+          activeBatch: product.activeBatch,
+          unit: product.unit || 'pcs',
           discount: 0,
           discountPrice: 0,
           lineTotal: effectivePrice,
@@ -672,6 +686,13 @@ function App() {
       category: product.category,
       description: product.description,
       unit: product.unit,
+      itemType: product.itemType || 'TABLET_CAPSULE',
+      tabletsPerCard: String(product.tabletsPerCard || '12'),
+      cardsPerBox: String(product.cardsPerBox || '10'),
+      boxesPerCarton: String(product.boxesPerCarton || '20'),
+      defaultPackType: product.defaultPackType || 'Carton',
+      piecesPerPack: String(product.piecesPerPack || '100'),
+      volumeOrWeight: product.volumeOrWeight || '',
       price: String(product.price),
       costPrice: String(product.costPrice),
       latestPurchaseCost: product.latestPurchaseCost || 0,
@@ -837,7 +858,9 @@ function App() {
         customerId: checkoutForm.customerId,
         loyaltyCard: checkoutForm.loyaltyCard,
         paymentMethod: checkoutForm.paymentMethod,
-        discount: Number(checkoutForm.discount || 0),
+        discount: discountAmount, // actual cash discount amount deducted
+        discountRate: checkoutForm.discountType === 'percentage' ? Number(checkoutForm.discount || 0) : undefined,
+        discountType: checkoutForm.discountType || 'percentage',
         notes: checkoutForm.notes,
         items: cart.map((item) => ({ productId: item.productId, quantity: item.quantity })),
         returnDays: Number(checkoutForm.returnDays || 0),
@@ -854,6 +877,7 @@ function App() {
           loyaltyCard: '',
           paymentMethod: 'cash',
           discount: '0',
+          discountType: 'percentage',
           returnDays: 7,
           notes: '',
           splitCash: '',
@@ -980,6 +1004,8 @@ function App() {
 
             <Route path="/pos" element={
               <POS
+                api={api}
+                session={session}
                 catalogProducts={catalogProducts}
                 customers={customers}
                 catalogQuery={catalogQuery}
@@ -996,6 +1022,7 @@ function App() {
                 cartTotal={cartTotal}
                 discountAmount={discountAmount}
                 barcodeValue={barcodeValue}
+                onNotice={setNotice}
               />
             } />
 
@@ -1031,7 +1058,11 @@ function App() {
             <Route path="/inventory" element={
               <AdminRoute session={session}>
                 <Inventory
+                  api={api}
+                  session={session}
                   products={products}
+                  refreshCoreData={refreshCoreData}
+                  onNotice={setNotice}
                   inventoryQuery={inventoryQuery}
                   setInventoryQuery={setInventoryQuery}
                   onlyLowStock={onlyLowStock}

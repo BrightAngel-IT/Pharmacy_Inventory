@@ -21,6 +21,7 @@ const returnRoutes = require('./routes/returnRoutes');
 const companyRoutes = require('./routes/companyRoutes');
 const branchRoutes = require('./routes/branchRoutes');
 const transferRoutes = require('./routes/transferRoutes');
+const batchRoutes = require('./routes/batchRoutes');
 const shiftRoutes = require('./routes/shiftRoutes');
 
 /**
@@ -108,6 +109,7 @@ function createApp() {
   app.use('/api/returns', returnRoutes);
   app.use('/api/company', companyRoutes);
   app.use('/api/branches', branchRoutes);
+  app.use('/api/batches', batchRoutes);
   app.use('/api/transfers', transferRoutes);
   app.use('/api/shifts', shiftRoutes);
 
