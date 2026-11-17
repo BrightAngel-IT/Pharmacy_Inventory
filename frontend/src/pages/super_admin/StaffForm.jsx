@@ -208,7 +208,8 @@ export default function StaffForm({ api, session, onNotice, editingStaff, setEdi
                     onChange={e => setFormData({ ...formData, role: e.target.value })}
                   >
                     <option value="cashier">Standard Operative (Cashier)</option>
-                    <option value="admin">System Administrator</option>
+                    <option value="admin">Branch Administrator</option>
+                    <option value="super_admin">Store Admin (Corporate Head)</option>
                   </select>
                 </div>
               </label>
@@ -247,7 +248,10 @@ export default function StaffForm({ api, session, onNotice, editingStaff, setEdi
             <div className="stack gap-4 py-4 border-y border-border-dashed">
               <div className="between x-small">
                 <span className="muted">Role Level:</span>
-                <span className="pill accent-soft">{formData.role.toUpperCase()}</span>
+                <span className="pill accent-soft">
+                  {formData.role === 'super_admin' ? 'STORE ADMIN' : formData.role === 'admin' ? 'BRANCH ADMIN' : formData.role.toUpperCase()}
+                </span>
+              </div>
               </div>
               <div className="between x-small">
                 <span className="muted">Branch:</span>

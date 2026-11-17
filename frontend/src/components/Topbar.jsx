@@ -29,7 +29,7 @@ export function Topbar({ activeView, session, overview, theme, setTheme, setIsSi
         <div className="stack gap-1">
           <p className="eyebrow" style={{ color: 'var(--accent-strong)' }}>Active Workspace</p>
           <h1 style={{ fontSize: '1.75rem' }}>
-            {activeView === 'overview' && (session.user.role === 'admin' ? 'Operations Command' : 'Cashier Terminal')}
+            {activeView === 'overview' && (session.user.role === 'super_admin' ? 'Store Command' : session.user.role === 'admin' ? 'Operations Command' : 'Cashier Terminal')}
             {activeView === 'pos' && 'Billing Desk'}
             {activeView === 'inventory' && 'Warehouse Control'}
             {activeView === 'reports' && 'Revenue Analytics'}

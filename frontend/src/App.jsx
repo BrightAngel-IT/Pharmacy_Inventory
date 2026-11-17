@@ -69,7 +69,7 @@ const api = axios.create({
 
 const demoCredentials = [
   {
-    label: 'Super Admin Demo',
+    label: 'Store Admin Demo',
     username: 'superadmin',
     password: 'superadmin123',
     role: 'Multi-branch operations and consolidated analytics',

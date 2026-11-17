@@ -120,13 +120,17 @@ export function Sidebar({
             <div className="cluster between">
               <div className="cluster gap-3">
                 <div className="avatar" style={{ width: '42px', height: '42px', borderRadius: '12px', background: 'var(--accent-soft)', display: 'grid', placeItems: 'center', color: 'var(--accent-strong)', border: '1px solid rgba(245, 158, 11, 0.2)' }}>
-                  {session.user.role === 'admin' ? <Crown size={22} /> : <User size={22} />}
+                  {session.user.role === 'super_admin' ? <Crown size={22} /> : session.user.role === 'admin' ? <Crown size={22} /> : <User size={22} />}
                 </div>
                 <div className="stack">
-                  <strong style={{ fontSize: '0.95rem' }}>{session.user.name}</strong>
+                  <strong style={{ fontSize: '0.95rem' }}>
+                    {session.user.role === 'super_admin' && (session.user.name === 'Super Admin' || !session.user.name) ? 'Store Admin' : session.user.name}
+                  </strong>
                   <div className="cluster gap-1">
                     <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: 'var(--success)' }}></div>
-                    <span className="muted small" style={{ textTransform: 'capitalize', fontSize: '0.75rem' }}>{session.user.role} Status</span>
+                    <span className="muted small" style={{ textTransform: 'capitalize', fontSize: '0.75rem' }}>
+                      {session.user.role === 'super_admin' ? 'Store Admin' : session.user.role === 'admin' ? 'Branch Admin' : 'Cashier'} Status
+                    </span>
                   </div>
                 </div>
               </div>

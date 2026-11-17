@@ -147,8 +147,9 @@ export default function StaffManagement({ api, session, onNotice, setEditingStaf
               onChange={e => setRoleFilter(e.target.value)}
             >
               <option value="all">All Roles</option>
-              <option value="admin">Administrators</option>
-              <option value="cashier">Operatives</option>
+              <option value="super_admin">Store Admin (Corporate)</option>
+              <option value="admin">Branch Administrators</option>
+              <option value="cashier">Operatives (Cashiers)</option>
             </select>
           </div>
         </div>
@@ -200,10 +201,10 @@ export default function StaffManagement({ api, session, onNotice, setEditingStaf
                   </div>
                 </td>
                 <td>
-                  <div className={`cluster gap-2 font-bold ${member.role === 'admin' ? 'accent-text' : 'muted'}`}>
-                    {member.role === 'admin' ? <Shield size={16} /> : <UserCheck size={16} />}
+                  <div className={`cluster gap-2 font-bold ${member.role === 'super_admin' ? 'accent-text' : member.role === 'admin' ? 'text-primary' : 'muted'}`}>
+                    {member.role === 'super_admin' ? <Shield size={16} style={{ color: 'var(--accent-strong)' }} /> : member.role === 'admin' ? <Shield size={16} /> : <UserCheck size={16} />}
                     <span className="small tracking-wide">
-                      {member.role.toUpperCase()}
+                      {member.role === 'super_admin' ? 'STORE ADMIN' : member.role === 'admin' ? 'BRANCH ADMIN' : member.role.toUpperCase()}
                     </span>
                   </div>
                 </td>
