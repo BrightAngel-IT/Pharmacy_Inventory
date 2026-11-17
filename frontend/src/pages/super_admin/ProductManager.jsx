@@ -236,6 +236,82 @@ export function ProductManager({
                   </div>
                 </div>
               )}
+
+              {/* Dynamic Packaging Hierarchy for Syrups, Creams, Injections, Medical Supplies & General Items */}
+              {productForm.itemType !== 'TABLET_CAPSULE' && (
+                <div className="stack gap-3 p-3 rounded" style={{ background: 'var(--accent-soft)', border: '1px solid var(--accent)' }}>
+                  <div className="cluster gap-2 align-center">
+                    <span style={{ fontSize: '1.2rem' }}>
+                      {productForm.itemType === 'BOTTLE_SYRUP' ? '🍾' :
+                       productForm.itemType === 'CREAM_TUBE' ? '🧴' :
+                       productForm.itemType === 'INJECTION_VIAL' ? '💉' :
+                       productForm.itemType === 'SURGICAL_DEVICE' ? '🩹' : '📦'}
+                    </span>
+                    <strong style={{ fontSize: '0.85rem' }}>
+                      Packaging Hierarchy (Master Carton ➔ Inner Box / Pack ➔ Single Unit)
+                    </strong>
+                  </div>
+                  <span className="x-small muted">
+                    Define bulk packaging for wholesale purchases. POS cashier sells single {
+                      productForm.itemType === 'BOTTLE_SYRUP' ? 'Bottles' :
+                      productForm.itemType === 'CREAM_TUBE' ? 'Tubes' :
+                      productForm.itemType === 'INJECTION_VIAL' ? 'Vials/Ampoules' :
+                      productForm.itemType === 'SURGICAL_DEVICE' ? 'Units/Packs' : 'Units'
+                    }.
+                  </span>
+
+                  <div className="grid-3 gap-3">
+                    <label className="field">
+                      <span className="small font-bold">
+                        1. {
+                          productForm.itemType === 'BOTTLE_SYRUP' ? 'Bottles per Inner Box:' :
+                          productForm.itemType === 'CREAM_TUBE' ? 'Tubes per Inner Box:' :
+                          productForm.itemType === 'INJECTION_VIAL' ? 'Vials per Small Box:' :
+                          productForm.itemType === 'SURGICAL_DEVICE' ? 'Packs per Small Box:' : 'Units per Box:'
+                        }
+                      </span>
+                      <input
+                        type="number"
+                        min="1"
+                        className="input compact font-strong text-center"
+                        name="cardsPerBox"
+                        placeholder="e.g. 10"
+                        value={productForm.cardsPerBox || '1'}
+                        onChange={handleProductFormChange}
+                        required
+                      />
+                      <span className="x-small muted">Units in 1 Box / Pack</span>
+                    </label>
+
+                    <label className="field">
+                      <span className="small font-bold">2. Boxes per Master Carton:</span>
+                      <input
+                        type="number"
+                        min="1"
+                        className="input compact font-strong text-center"
+                        name="boxesPerCarton"
+                        placeholder="e.g. 20"
+                        value={productForm.boxesPerCarton || '20'}
+                        onChange={handleProductFormChange}
+                        required
+                      />
+                      <span className="x-small muted font-mono">Boxes in 1 Master Carton</span>
+                    </label>
+
+                    <label className="field">
+                      <span className="small font-bold">Total in Master Carton:</span>
+                      <div className="input compact font-strong text-center" style={{ background: 'var(--panel)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        <span className="text-accent font-bold font-mono">
+                          {(Number(productForm.cardsPerBox || 1) * Number(productForm.boxesPerCarton || 1))} Units
+                        </span>
+                      </div>
+                      <span className="x-small text-accent font-bold font-mono">
+                        = {(Number(productForm.cardsPerBox || 1) * Number(productForm.boxesPerCarton || 1))} per carton
+                      </span>
+                    </label>
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="stack gap-3 pt-3" style={{ borderTop: '1px solid var(--border)', marginTop: '0.5rem' }}>

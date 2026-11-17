@@ -136,8 +136,9 @@ export default function Purchases({ api, session, onNotice, refreshCoreData }) {
           // 1 Master Carton = boxesPerCarton * cardsPerBox * tabletsPerCard
           item.piecesPerUnit = item.boxesPerCarton * item.cardsPerBox * item.tabletsPerCard; // 20 * 10 * 12 = 2,400
         } else {
-          item.packType = selectedProduct.unit === 'bottle' ? 'Bottle' : 'Unit/Box';
-          item.piecesPerUnit = 1;
+          item.packType = 'Master Carton';
+          // 1 Master Carton = boxesPerCarton * cardsPerBox (Units per Box)
+          item.piecesPerUnit = Math.max(1, item.boxesPerCarton * item.cardsPerBox);
         }
 
         if (selectedProduct.costPrice) {
@@ -151,9 +152,12 @@ export default function Purchases({ api, session, onNotice, refreshCoreData }) {
     } else if (field === 'boxesPerCarton' || field === 'cardsPerBox' || field === 'tabletsPerCard') {
       const bpc = Number(item.boxesPerCarton || 20);
       const cpb = Number(item.cardsPerBox || 10);
-      const tpc = Number(item.tabletsPerCard || 12);
-      item.piecesPerUnit = bpc * cpb * tpc;
-      if (item.costPrice) {
+      const tpc = item.itemType === 'TABLET_CAPSULE' ? Number(item.tabletsPerCard || 12) : 1;
+      item.piecesPerUnit = Math.max(1, bpc * cpb * tpc);
+      // When packaging hierarchy changes, keep Unit Cost constant and adjust Carton Cost accordingly!
+      if (item.unitPrice && Number(item.unitPrice) > 0) {
+        item.costPrice = (Number(item.unitPrice) * item.piecesPerUnit).toFixed(2);
+      } else if (item.costPrice) {
         item.unitPrice = (Number(item.costPrice) / item.piecesPerUnit).toFixed(2);
       }
     } else if (field === 'packType') {
@@ -214,6 +218,9 @@ export default function Purchases({ api, session, onNotice, refreshCoreData }) {
           packType: i.packType || `${i.piecesPerUnit || 1} Pack`,
           packQuantity: Number(i.quantity),
           piecesPerPack: Number(i.piecesPerUnit || 1),
+          tabletsPerCard: Number(i.tabletsPerCard || 1),
+          cardsPerBox: Number(i.cardsPerBox || 1),
+          boxesPerCarton: Number(i.boxesPerCarton || 1),
           quantity: totalPieces,
           costPrice: costPerPiece,
           sellingPrice: Number(i.sellingPrice || 0),
@@ -452,9 +459,9 @@ export default function Purchases({ api, session, onNotice, refreshCoreData }) {
                       </div>
 
                       {/* Row 2: Packaging Hierarchy & Quantities */}
-                      <div className="between align-center flex-wrap gap-3 pt-2" style={{ borderTop: '1px dashed var(--border)' }}>
+                      <div className="between align-center flex-wrap gap-3 pt-3" style={{ borderTop: '1px dashed var(--border)' }}>
                         <div className="cluster gap-2 align-center flex-wrap">
-                          <span className="badge info font-bold" style={{ padding: '4px 10px', fontSize: '0.75rem' }}>
+                          <span className="badge info font-bold" style={{ padding: '6px 12px', fontSize: '0.78rem' }}>
                             {item.packType || 'Master Carton'}
                           </span>
 
@@ -462,11 +469,11 @@ export default function Purchases({ api, session, onNotice, refreshCoreData }) {
                           {item.itemType === 'TABLET_CAPSULE' && (
                             <div className="cluster gap-2 align-center p-2 rounded" style={{ background: 'var(--bg-soft)', border: '1px dashed var(--border)' }}>
                               <div className="cluster gap-1 align-center">
-                                <span className="x-small muted">Boxes:</span>
+                                <span className="x-small muted font-bold">Boxes:</span>
                                 <input
                                   className="input compact font-strong text-center"
                                   type="number"
-                                  style={{ width: '55px', padding: '4px' }}
+                                  style={{ width: '60px', padding: '4px' }}
                                   value={item.boxesPerCarton || 20}
                                   onChange={e => updateItem(idx, 'boxesPerCarton', Number(e.target.value))}
                                   min="1"
@@ -474,11 +481,11 @@ export default function Purchases({ api, session, onNotice, refreshCoreData }) {
                               </div>
                               <span className="muted x-small">×</span>
                               <div className="cluster gap-1 align-center">
-                                <span className="x-small muted">Cards:</span>
+                                <span className="x-small muted font-bold">Cards:</span>
                                 <input
                                   className="input compact font-strong text-center"
                                   type="number"
-                                  style={{ width: '55px', padding: '4px' }}
+                                  style={{ width: '60px', padding: '4px' }}
                                   value={item.cardsPerBox || 10}
                                   onChange={e => updateItem(idx, 'cardsPerBox', Number(e.target.value))}
                                   min="1"
@@ -486,11 +493,11 @@ export default function Purchases({ api, session, onNotice, refreshCoreData }) {
                               </div>
                               <span className="muted x-small">×</span>
                               <div className="cluster gap-1 align-center">
-                                <span className="x-small muted">Tabs:</span>
+                                <span className="x-small muted font-bold">Tabs:</span>
                                 <input
                                   className="input compact font-strong text-center"
                                   type="number"
-                                  style={{ width: '55px', padding: '4px' }}
+                                  style={{ width: '60px', padding: '4px' }}
                                   value={item.tabletsPerCard || 12}
                                   onChange={e => updateItem(idx, 'tabletsPerCard', Number(e.target.value))}
                                   min="1"
@@ -498,6 +505,38 @@ export default function Purchases({ api, session, onNotice, refreshCoreData }) {
                               </div>
                               <span className="badge neutral x-small font-mono font-bold" style={{ color: 'var(--accent)' }}>
                                 = {item.piecesPerUnit || 2400} tabs/carton
+                              </span>
+                            </div>
+                          )}
+
+                          {/* Master Carton Hierarchy Breakdown for Syrups, Creams, Injections, Medical Supplies */}
+                          {item.itemType !== 'TABLET_CAPSULE' && (
+                            <div className="cluster gap-2 align-center p-2 rounded" style={{ background: 'var(--bg-soft)', border: '1px dashed var(--border)' }}>
+                              <div className="cluster gap-1 align-center">
+                                <span className="x-small muted font-bold">Boxes:</span>
+                                <input
+                                  className="input compact font-strong text-center"
+                                  type="number"
+                                  style={{ width: '60px', padding: '4px' }}
+                                  value={item.boxesPerCarton || 20}
+                                  onChange={e => updateItem(idx, 'boxesPerCarton', Number(e.target.value))}
+                                  min="1"
+                                />
+                              </div>
+                              <span className="muted x-small">×</span>
+                              <div className="cluster gap-1 align-center">
+                                <span className="x-small muted font-bold">Units/Box:</span>
+                                <input
+                                  className="input compact font-strong text-center"
+                                  type="number"
+                                  style={{ width: '60px', padding: '4px' }}
+                                  value={item.cardsPerBox || 1}
+                                  onChange={e => updateItem(idx, 'cardsPerBox', Number(e.target.value))}
+                                  min="1"
+                                />
+                              </div>
+                              <span className="badge neutral x-small font-mono font-bold" style={{ color: 'var(--accent)' }}>
+                                = {item.piecesPerUnit || (Number(item.boxesPerCarton || 20) * Number(item.cardsPerBox || 1))} units/carton
                               </span>
                             </div>
                           )}
@@ -515,19 +554,19 @@ export default function Purchases({ api, session, onNotice, refreshCoreData }) {
                               min="1"
                             />
                             <span className="badge neutral small font-mono font-bold">
-                              = {Number(item.quantity || 1) * Number(item.piecesPerUnit || 1)} Tablets
+                              = {Number(item.quantity || 1) * Number(item.piecesPerUnit || 1)} {item.itemType === 'TABLET_CAPSULE' ? 'Tablets' : 'Units'}
                             </span>
                           </div>
                         </div>
 
-                        {/* Pricing Inputs */}
-                        <div className="cluster gap-3 align-center flex-wrap ml-auto">
-                          <div className="cluster gap-1 align-center">
-                            <span className="x-small muted font-bold">Cost/Carton:</span>
+                        {/* Pricing Inputs - High Visibility Inputs with Clear Labels */}
+                        <div className="cluster gap-3 align-center flex-wrap" style={{ minWidth: '380px' }}>
+                          <div className="stack" style={{ gap: '3px' }}>
+                            <span className="x-small muted font-bold uppercase" style={{ fontSize: '0.65rem' }}>Cost / Carton</span>
                             <input
                               className="input font-strong"
                               type="number"
-                              style={{ width: '120px' }}
+                              style={{ width: '120px', padding: '6px 10px' }}
                               placeholder="Carton Cost"
                               value={item.costPrice}
                               onChange={e => updateItem(idx, 'costPrice', e.target.value)}
@@ -537,12 +576,12 @@ export default function Purchases({ api, session, onNotice, refreshCoreData }) {
                             />
                           </div>
 
-                          <div className="cluster gap-1 align-center">
-                            <span className="x-small muted">Cost/Tab:</span>
+                          <div className="stack" style={{ gap: '3px' }}>
+                            <span className="x-small muted font-bold uppercase" style={{ fontSize: '0.65rem' }}>Cost / Unit</span>
                             <input
-                              className="input"
+                              className="input font-mono"
                               type="number"
-                              style={{ width: '80px' }}
+                              style={{ width: '90px', padding: '6px 10px' }}
                               placeholder="Cost/Pc"
                               value={item.unitPrice || ''}
                               onChange={e => updateItem(idx, 'unitPrice', e.target.value)}
@@ -551,13 +590,13 @@ export default function Purchases({ api, session, onNotice, refreshCoreData }) {
                             />
                           </div>
 
-                          <div className="cluster gap-1 align-center">
-                            <span className="x-small font-bold" style={{ color: 'var(--accent-strong)' }}>Sell/Tab:</span>
+                          <div className="stack" style={{ gap: '3px' }}>
+                            <span className="x-small font-bold uppercase" style={{ color: 'var(--accent-strong)', fontSize: '0.65rem' }}>Selling / Unit</span>
                             <input
                               className="input font-strong"
                               type="number"
-                              style={{ width: '95px', borderColor: 'var(--accent)' }}
-                              placeholder="Selling Price"
+                              style={{ width: '110px', padding: '6px 10px', borderColor: 'var(--accent)' }}
+                              placeholder="Sell Price"
                               value={item.sellingPrice || ''}
                               onChange={e => updateItem(idx, 'sellingPrice', e.target.value)}
                               required

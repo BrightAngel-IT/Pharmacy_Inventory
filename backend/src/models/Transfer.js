@@ -102,9 +102,12 @@ const transferSchema = new mongoose.Schema({
       quantity: { type: Number, default: 0 }, // total pieces dispatched in this trip
       receivedPackQuantity: { type: Number, default: null }, // actual packs arrived
       damagedPackQuantity: { type: Number, default: 0 }, // packs damaged upon arrival
+      damagedQuantity: { type: Number, default: 0 }, // actual damaged pieces/units (Quarantine)
+      shortagePackQuantity: { type: Number, default: 0 }, // packs missing in transit (undelivered)
+      shortageQuantity: { type: Number, default: 0 }, // actual missing pieces/units (Shortage)
       acceptedPackQuantity: { type: Number, default: null }, // packs accepted into stock (received - damaged)
       acceptedQuantity: { type: Number, default: 0 }, // total units/tablets added to stock
-      rejectedQuantity: { type: Number, default: 0 }, // returned/damaged units kept out of stock
+      rejectedQuantity: { type: Number, default: 0 }, // total variance (shortage + damaged)
       costPricePerUnit: { type: Number, default: 0 },
       sellingPricePerUnit: { type: Number, default: 0 },
       totalCostValue: { type: Number, default: 0 },

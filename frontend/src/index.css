@@ -1014,32 +1014,51 @@ textarea:focus {
 
 /* Notices */
 .notice-banner {
-  padding: 16px 24px;
-  border-radius: 16px;
-  font-weight: 500;
+  position: fixed;
+  top: 24px;
+  right: 24px;
+  z-index: 100000;
+  min-width: 320px;
+  max-width: 480px;
+  padding: 16px 22px;
+  border-radius: 14px;
+  font-weight: 600;
+  font-size: 0.95rem;
   display: flex;
   align-items: center;
   gap: 12px;
-  margin-bottom: 24px;
-  border: 1px solid transparent;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.22), 0 4px 12px rgba(0, 0, 0, 0.12);
+  border: 1.5px solid transparent;
+  animation: slideInDown 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes slideInDown {
+  from {
+    opacity: 0;
+    transform: translateY(-20px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 .notice-banner.success {
-  background: #ecfdf5;
-  border-color: #10b981;
-  color: #065f46;
+  background: #065f46;
+  border-color: #34d399;
+  color: #ffffff;
 }
 
 .notice-banner.error {
-  background: #fef2f2;
-  border-color: #ef4444;
-  color: #991b1b;
+  background: #991b1b;
+  border-color: #f87171;
+  color: #ffffff;
 }
 
 .notice-banner.warning {
-  background: #fffbeb;
-  border-color: #f59e0b;
-  color: #92400e;
+  background: #92400e;
+  border-color: #fbbf24;
+  color: #ffffff;
 }
 
 /* Loading */

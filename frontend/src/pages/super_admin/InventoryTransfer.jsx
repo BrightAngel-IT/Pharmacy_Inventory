@@ -80,29 +80,72 @@ export function InventoryTransfer({ api, session, onNotice, refreshCoreData }) {
     const printWindow = window.open('', '_blank', 'width=800,height=900')
     if (!printWindow) return
 
+    const formatCurrency = (val) => {
+      const num = Number(val || 0)
+      return `LKR ${num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+    }
+
+    let grandTotalCost = 0
+    let grandTotalSelling = 0
+    let grandTotalPieces = 0
+
     const productRows = transfer.products?.map((p, idx) => {
-      const unitLabel = (p.unit || 'pcs').toUpperCase()
-      const isBulk = p.unit && p.unit !== 'pcs'
-      const unitQtyVal = p.unitQty || (p.piecesPerUnit ? (p.quantity / p.piecesPerUnit) : (isBulk ? '-' : p.quantity))
-      const unitQtyText = isBulk ? `${unitQtyVal} ${unitLabel}` : `${p.quantity} PCS`
-      const piecesPerUnitText = isBulk ? `${p.piecesPerUnit || '-'} pcs / ${p.unit}` : '1 pc'
-      const totalPieces = p.quantity
+      const prodDef = products.find(prod => String(prod._id) === String(p.product?._id || p.product))
+      const prodName = p.product?.name || prodDef?.name || 'Item'
+      const sku = p.product?.sku || prodDef?.sku || ''
+      
+      const batchNo = p.batchNumber || '-'
+      const expDate = p.expiryDate ? new Date(p.expiryDate).toLocaleDateString() : '-'
+      
+      const packType = p.packType || 'Carton'
+      const packQty = Number(p.packQuantity || p.unitQty || 1)
+      const piecesPerPack = Number(p.piecesPerPack || p.piecesPerUnit || 1)
+      const totalPieces = Number(p.quantity || (packQty * piecesPerPack))
+      
+      const boxesPerCarton = Number(prodDef?.boxesPerCarton || 1)
+      const totalBoxes = packQty * boxesPerCarton
+      
+      const costPerUnit = Number(p.costPricePerUnit || prodDef?.costPrice || 0)
+      const sellingPerUnit = Number(p.sellingPricePerUnit || prodDef?.sellingPrice || 0)
+      const cartonCost = costPerUnit * piecesPerPack
+      const totalCost = Number(p.totalCostValue || (costPerUnit * totalPieces))
+      const totalSelling = Number(p.totalSellingValue || (sellingPerUnit * totalPieces))
+
+      grandTotalCost += totalCost
+      grandTotalSelling += totalSelling
+      grandTotalPieces += totalPieces
 
       return `
         <tr style="background: ${idx % 2 === 0 ? '#ffffff' : '#f9fafb'};">
           <td style="padding: 10px 8px; text-align: center; font-weight: bold; color: #555;">${idx + 1}</td>
           <td style="padding: 10px 8px;">
-            <strong style="font-size: 14px; color: #111;">${p.product?.name || 'Item'}</strong>
-            ${p.product?.sku ? `<br><small style="color: #666; font-family: monospace;">SKU: ${p.product.sku}</small>` : ''}
+            <strong style="font-size: 14px; color: #111;">${prodName}</strong>
+            ${sku ? `<br><small style="color: #666; font-family: monospace;">SKU: ${sku}</small>` : ''}
           </td>
-          <td style="padding: 10px 8px; text-align: center; color: #b45309; font-weight: bold; font-size: 13px;">
-            ${unitQtyText}
+          <td style="padding: 10px 8px; text-align: center;">
+            <span style="font-family: monospace; font-weight: bold; background: #e0f2fe; color: #0369a1; padding: 2px 6px; border-radius: 4px; font-size: 11px;">
+              ${batchNo}
+            </span>
+            <div style="font-size: 10px; color: #64748b; margin-top: 2px;">Exp: ${expDate}</div>
           </td>
-          <td style="padding: 10px 8px; text-align: center; color: #374151; font-weight: 500;">
-            ${piecesPerUnitText}
+          <td style="padding: 10px 8px; text-align: center; font-weight: bold; color: #0f172a;">
+            ${packQty} ${packType}
+            <div style="font-size: 11px; color: #b45309; font-weight: 600;">
+              = ${Number.isInteger(totalBoxes) ? totalBoxes : totalBoxes.toFixed(1)} Boxes (${boxesPerCarton} box/carton)
+            </div>
           </td>
-          <td style="padding: 10px 8px; text-align: right; font-weight: bold; font-size: 14px; color: #111;">
-            ${totalPieces} PCS
+          <td style="padding: 10px 8px; text-align: center; color: #374151; font-size: 11px;">
+            ${piecesPerPack.toLocaleString()} pcs / ${packType}
+          </td>
+          <td style="padding: 10px 8px; text-align: right; font-weight: bold; font-size: 13px; color: #111;">
+            ${totalPieces.toLocaleString()} PCS
+          </td>
+          <td style="padding: 10px 8px; text-align: right; font-size: 12px; color: #334155;">
+            <div><strong>${formatCurrency(cartonCost)}</strong> / ${packType}</div>
+            <div style="font-size: 10px; color: #64748b;">${formatCurrency(costPerUnit)} / pc</div>
+          </td>
+          <td style="padding: 10px 8px; text-align: right; font-weight: bold; font-size: 13px; color: #047857; background: #f0fdf4;">
+            ${formatCurrency(totalCost)}
           </td>
         </tr>
       `
@@ -112,8 +155,25 @@ export function InventoryTransfer({ api, session, onNotice, refreshCoreData }) {
       let breakdownHtml = ''
       if (tr.items && tr.items.length > 0) {
         breakdownHtml = tr.items
-          .filter(i => Number(i.unitQty || i.quantity) > 0)
-          .map(i => `<div style="font-size: 11px; color: #111;">• <strong>${i.productName || 'Product'}:</strong> ${i.unitQty} ${i.unit ? i.unit.toUpperCase() : 'PCS'} (${i.quantity} pcs)</div>`)
+          .filter(i => Number(i.packQuantity || i.quantity || i.unitQty) > 0)
+          .map(i => {
+            const pDef = products.find(p => String(p._id) === String(i.product?._id || i.product))
+            const bpc = Number(pDef?.boxesPerCarton || 1)
+            const pQty = Number(i.packQuantity || 1)
+            const bQty = pQty * bpc
+            const ppp = Number(i.piecesPerPack || (pQty > 0 ? (i.quantity / pQty) : 1))
+            const cPrice = Number(i.costPricePerUnit || pDef?.costPrice || 0)
+            const totC = cPrice * (i.quantity || (pQty * ppp))
+
+            return `
+              <div style="font-size: 11.5px; color: #0f172a; margin-bottom: 4px; padding-bottom: 4px; border-bottom: 1px dashed #e2e8f0;">
+                • <strong>${i.productName || 'Product'}</strong>: 
+                <span style="font-weight: bold; color: #b45309;">${pQty} ${i.packType || 'Carton'}</span>
+                <span style="color: #64748b; font-size: 11px;"> (${bQty} Boxes • ${(i.quantity || (pQty * ppp)).toLocaleString()} pcs)</span>
+                <span style="float: right; font-weight: bold; color: #047857;">${formatCurrency(totC)}</span>
+              </div>
+            `
+          })
           .join('')
       }
       if (!breakdownHtml) {
@@ -182,27 +242,44 @@ export function InventoryTransfer({ api, session, onNotice, refreshCoreData }) {
         <table>
           <thead>
             <tr>
-              <th style="width: 40px; text-align: center;">#</th>
+              <th style="width: 30px; text-align: center;">#</th>
               <th>Product Name / Description</th>
-              <th style="text-align: center; width: 120px;">Packaging / Qty</th>
-              <th style="text-align: center; width: 130px;">Pieces Per Box/Unit</th>
-              <th style="text-align: right; width: 130px;">Total Pieces (PCS)</th>
+              <th style="text-align: center; width: 110px;">Batch & Expiry</th>
+              <th style="text-align: center; width: 150px;">Dispatched Packaging</th>
+              <th style="text-align: center; width: 120px;">Packing Size</th>
+              <th style="text-align: right; width: 110px;">Total Units</th>
+              <th style="text-align: right; width: 130px;">Unit Cost</th>
+              <th style="text-align: right; width: 140px; color: #047857;">Total Cost Value</th>
             </tr>
           </thead>
           <tbody>
             ${productRows}
           </tbody>
+          <tfoot>
+            <tr style="background: #f8fafc; font-weight: bold; border-top: 2px solid #334155;">
+              <td colspan="5" style="padding: 10px 8px; text-align: right; text-transform: uppercase; font-size: 11px; color: #475569;">
+                Transfer Valuation Totals:
+              </td>
+              <td style="padding: 10px 8px; text-align: right; font-size: 13px; color: #0f172a;">
+                ${grandTotalPieces.toLocaleString()} PCS
+              </td>
+              <td></td>
+              <td style="padding: 10px 8px; text-align: right; font-size: 14px; color: #047857; background: #ecfdf5;">
+                ${formatCurrency(grandTotalCost)}
+              </td>
+            </tr>
+          </tfoot>
         </table>
 
         <div class="section-title">2. Logistics, Vehicles & Trips Breakdown</div>
         <table>
           <thead>
             <tr>
-              <th>Trip #</th>
-              <th>Vehicle / Lorry No</th>
-              <th>Driver & Contact</th>
-              <th style="text-align: center;">Dispatched Qty / Boxes</th>
-              <th>Notes / Remarks</th>
+              <th style="width: 70px;">Trip #</th>
+              <th style="width: 110px;">Vehicle / Lorry</th>
+              <th style="width: 140px;">Driver & Contact</th>
+              <th>Dispatched Breakdown (Cartons, Boxes & Value)</th>
+              <th style="width: 130px;">Notes / Remarks</th>
             </tr>
           </thead>
           <tbody>
@@ -275,10 +352,25 @@ export function InventoryTransfer({ api, session, onNotice, refreshCoreData }) {
     if (dispatchedPacks <= 0) dispatchedPacks = 1
 
     const arrivedPacks = item.receivedPackQuantity !== undefined ? item.receivedPackQuantity : dispatchedPacks
-    const damagedPacks = item.damagedPackQuantity !== undefined ? item.damagedPackQuantity : 0
-    const acceptedPacks = item.acceptedPackQuantity !== undefined ? item.acceptedPackQuantity : (arrivedPacks - damagedPacks)
-    const quarantinedUnits = item.rejectedQuantity || (damagedPacks * piecesPerPack)
-    const acceptedUnits = item.acceptedQuantity || (acceptedPacks * piecesPerPack)
+    const damagedPacks = item.damagedPackQuantity !== undefined 
+      ? item.damagedPackQuantity 
+      : 0
+    const shortagePacks = item.shortagePackQuantity !== undefined 
+      ? item.shortagePackQuantity 
+      : Math.max(0, dispatchedPacks - arrivedPacks)
+    const acceptedPacks = item.acceptedPackQuantity !== undefined 
+      ? item.acceptedPackQuantity 
+      : Math.max(0, arrivedPacks - damagedPacks)
+
+    const quarantinedUnits = item.damagedQuantity !== undefined && item.damagedQuantity !== null
+      ? Number(item.damagedQuantity)
+      : (damagedPacks * piecesPerPack)
+    const shortageUnits = item.shortageQuantity !== undefined && item.shortageQuantity !== null
+      ? Number(item.shortageQuantity)
+      : (shortagePacks * piecesPerPack)
+    const acceptedUnits = item.acceptedQuantity !== undefined && item.acceptedQuantity !== null 
+      ? Number(item.acceptedQuantity) 
+      : (acceptedPacks * piecesPerPack)
     const dispatchedUnits = dispatchedPacks * piecesPerPack
 
     return {
@@ -288,6 +380,8 @@ export function InventoryTransfer({ api, session, onNotice, refreshCoreData }) {
       dispatchedPacks,
       dispatchedUnits,
       arrivedPacks,
+      shortagePacks,
+      shortageUnits,
       damagedPacks,
       quarantinedUnits,
       acceptedPacks,
@@ -317,9 +411,11 @@ export function InventoryTransfer({ api, session, onNotice, refreshCoreData }) {
           <td style="padding: 10px 8px; text-align: center; font-weight: bold;">
             ${q.arrivedPacks} ${q.packType}
           </td>
-          <td style="padding: 10px 8px; text-align: center; background: #fef2f2; color: #dc2626; font-weight: bold;">
-            ${q.damagedPacks} ${q.packType}
-            <div style="font-size: 11px; font-weight: normal;">(${q.quarantinedUnits} quarantined)</div>
+          <td style="padding: 10px 8px; text-align: center; background: ${q.shortagePacks > 0 ? '#fff7ed' : 'transparent'}; color: ${q.shortagePacks > 0 ? '#ea580c' : '#64748b'}; font-weight: bold;">
+            ${q.shortagePacks > 0 ? `${q.shortagePacks} ${q.packType}<div style="font-size: 11px; font-weight: normal;">(${q.shortageUnits} units missing)</div>` : '—'}
+          </td>
+          <td style="padding: 10px 8px; text-align: center; background: ${q.damagedPacks > 0 ? '#fef2f2' : 'transparent'}; color: ${q.damagedPacks > 0 ? '#dc2626' : '#64748b'}; font-weight: bold;">
+            ${q.damagedPacks > 0 ? `${q.damagedPacks} ${q.packType}<div style="font-size: 11px; font-weight: normal;">(${q.quarantinedUnits} quarantined)</div>` : '0'}
           </td>
           <td style="padding: 10px 8px; text-align: center; background: #ecfdf5; color: #047857; font-weight: bold;">
             ${q.acceptedPacks} ${q.packType}
@@ -380,6 +476,7 @@ export function InventoryTransfer({ api, session, onNotice, refreshCoreData }) {
               <th>Product</th>
               <th style="text-align: center;">Dispatched</th>
               <th style="text-align: center;">Arrived</th>
+              <th style="text-align: center; color: #ea580c;">Transit Shortage (Missing)</th>
               <th style="text-align: center; color: #b91c1c;">Damaged (Quarantine)</th>
               <th style="text-align: center; color: #047857;">Net Accepted</th>
             </tr>
@@ -470,12 +567,13 @@ export function InventoryTransfer({ api, session, onNotice, refreshCoreData }) {
                 <th style="padding: 8px; text-align: left;">Product</th>
                 <th style="padding: 8px; text-align: center;">Dispatched</th>
                 <th style="padding: 8px; text-align: center;">Arrived</th>
+                <th style="padding: 8px; text-align: center; color: #ea580c;">Transit Shortage</th>
                 <th style="padding: 8px; text-align: center; color: #b91c1c;">Damaged (Quarantined)</th>
                 <th style="padding: 8px; text-align: center; color: #047857;">Net Accepted</th>
               </tr>
             </thead>
             <tbody>
-              ${itemRows || '<tr><td colspan="5" style="padding: 8px; text-align: center; color: #888;">No inspection item details</td></tr>'}
+              ${itemRows || '<tr><td colspan="6" style="padding: 8px; text-align: center; color: #888;">No inspection item details</td></tr>'}
             </tbody>
           </table>
           ${tr.receivedNotes ? `<div style="padding: 8px 12px; background: #fffbeb; font-size: 11px; color: #92400e; border-top: 1px solid #fef3c7;"><strong>Receiver Remarks:</strong> "${tr.receivedNotes}"</div>` : ''}
@@ -632,16 +730,20 @@ export function InventoryTransfer({ api, session, onNotice, refreshCoreData }) {
 
     const currentItem = newItems[index]
 
-    // If product changed, find default prices and reset batch
+    // If product changed, find default prices and reset batch (user must explicitly select batch)
     if (field === 'productId') {
       const prod = products.find(p => String(p._id) === String(value))
       if (prod) {
         currentItem.costPrice = prod.costPrice || 0
         currentItem.sellingPrice = prod.price || 0
       }
+      
       currentItem.batchId = ''
       currentItem.batchNumber = ''
       currentItem.expiryDate = ''
+      currentItem.packType = 'Master Carton'
+      currentItem.piecesPerUnit = 1
+      currentItem.unit = 'carton'
     }
 
     // If batch selected, auto-fill prices, expiry, and pack details from that batch!
@@ -653,22 +755,46 @@ export function InventoryTransfer({ api, session, onNotice, refreshCoreData }) {
         currentItem.costPrice = selectedBatch.costPricePerUnit || 0
         currentItem.sellingPrice = selectedBatch.sellingPricePerUnit || 0
         
-        // Find product to determine packaging hierarchy options
         const prod = products.find(p => String(p._id) === String(currentItem.productId || selectedBatch.product?._id || selectedBatch.product))
-        const tpc = Number(prod?.tabletsPerCard || selectedBatch.product?.tabletsPerCard || 12)
-        const cpb = Number(prod?.cardsPerBox || selectedBatch.product?.cardsPerBox || 10)
-        const bpc = Number(prod?.boxesPerCarton || selectedBatch.product?.boxesPerCarton || 20)
-        const isTablet = (prod?.itemType || selectedBatch.product?.itemType) === 'TABLET_CAPSULE' || (prod?.category || '').toLowerCase() === 'medicine' || selectedBatch.packType === 'Master Carton'
+        const itemType = prod?.itemType || selectedBatch.product?.itemType || 'TABLET_CAPSULE'
+        const isTablet = itemType === 'TABLET_CAPSULE'
+        
+        // Prioritize batch-level packaging hierarchy if specified at purchase, fallback to product defaults
+        const tpc = Number(selectedBatch.tabletsPerCard || prod?.tabletsPerCard || 12)
+        const cpb = Number(selectedBatch.cardsPerBox || prod?.cardsPerBox || 10)
+        const bpc = Number(selectedBatch.boxesPerCarton || prod?.boxesPerCarton || 20)
+
+        // Calculate piecesPerUnit based on the currently selected packType!
+        const currentPack = currentItem.packType || selectedBatch.packType || 'Master Carton'
+        currentItem.packType = currentPack
 
         if (isTablet) {
-          // Default to Master Carton from batch purchase
-          currentItem.packType = selectedBatch.packType || 'Master Carton'
-          currentItem.piecesPerUnit = selectedBatch.piecesPerPack || (bpc * cpb * tpc)
-          currentItem.unit = 'carton'
+          if (currentPack === 'Small Box' || currentPack === 'Box') {
+            currentItem.piecesPerUnit = (cpb > 1 ? cpb : 10) * (tpc > 1 ? tpc : 12)
+            currentItem.unit = 'box'
+          } else if (currentPack === 'Card / Strip') {
+            currentItem.piecesPerUnit = tpc > 1 ? tpc : 12
+            currentItem.unit = 'strip'
+          } else if (currentPack === 'Single Tablet / Pc' || currentPack === 'Single Tablet' || currentPack === 'Loose/Single') {
+            currentItem.piecesPerUnit = 1
+            currentItem.unit = 'pcs'
+          } else {
+            currentItem.packType = 'Master Carton'
+            currentItem.piecesPerUnit = selectedBatch.piecesPerPack || (bpc * cpb * tpc)
+            currentItem.unit = 'carton'
+          }
         } else {
-          currentItem.packType = selectedBatch.packType || 'Unit'
-          currentItem.piecesPerUnit = selectedBatch.piecesPerPack || 1
-          currentItem.unit = 'pcs'
+          if (currentPack === 'Inner Box' || currentPack === 'Small Box' || currentPack === 'Box') {
+            currentItem.piecesPerUnit = cpb > 1 ? cpb : 10
+            currentItem.unit = 'box'
+          } else if (currentPack === 'Single Unit / Bottle' || currentPack === 'Single Unit' || currentPack === 'Loose/Single') {
+            currentItem.piecesPerUnit = 1
+            currentItem.unit = 'pcs'
+          } else {
+            currentItem.packType = 'Master Carton'
+            currentItem.piecesPerUnit = selectedBatch.piecesPerPack || (bpc * cpb)
+            currentItem.unit = 'carton'
+          }
         }
       }
     }
@@ -677,25 +803,42 @@ export function InventoryTransfer({ api, session, onNotice, refreshCoreData }) {
     if (field === 'packType') {
       const prod = products.find(p => String(p._id) === String(currentItem.productId))
       const selectedBatch = sourceBranchBatches.find(b => String(b._id) === String(currentItem.batchId))
-      const tpc = Number(prod?.tabletsPerCard || selectedBatch?.product?.tabletsPerCard || 12)
-      const cpb = Number(prod?.cardsPerBox || selectedBatch?.product?.cardsPerBox || 10)
-      const bpc = Number(prod?.boxesPerCarton || selectedBatch?.product?.boxesPerCarton || 20)
+      const itemType = prod?.itemType || selectedBatch?.product?.itemType || 'TABLET_CAPSULE'
+      const isTablet = itemType === 'TABLET_CAPSULE'
+      
+      // Prioritize batch-level packaging hierarchy if specified at purchase, fallback to product defaults
+      const tpc = Number(selectedBatch?.tabletsPerCard || prod?.tabletsPerCard || 12)
+      const cpb = Number(selectedBatch?.cardsPerBox || prod?.cardsPerBox || 10)
+      const bpc = Number(selectedBatch?.boxesPerCarton || prod?.boxesPerCarton || 20)
 
-      if (value === 'Master Carton') {
-        currentItem.piecesPerUnit = selectedBatch?.piecesPerPack || (bpc * cpb * tpc)
-        currentItem.unit = 'carton'
-      } else if (value === 'Small Box') {
-        currentItem.piecesPerUnit = cpb * tpc
-        currentItem.unit = 'box'
-      } else if (value === 'Card / Strip') {
-        currentItem.piecesPerUnit = tpc
-        currentItem.unit = 'strip'
-      } else if (value === 'Single Tablet / Pc' || value === 'Loose/Single') {
-        currentItem.piecesPerUnit = 1
-        currentItem.unit = 'pcs'
-      } else if (value === 'Standard Pack') {
-        currentItem.piecesPerUnit = selectedBatch?.piecesPerPack || 1
-        currentItem.unit = 'pack'
+      if (isTablet) {
+        if (value === 'Master Carton') {
+          currentItem.piecesPerUnit = selectedBatch?.piecesPerPack || (bpc * cpb * tpc)
+          currentItem.unit = 'carton'
+        } else if (value === 'Small Box' || value === 'Box') {
+          currentItem.piecesPerUnit = (cpb > 1 ? cpb : 10) * (tpc > 1 ? tpc : 12)
+          currentItem.unit = 'box'
+        } else if (value === 'Card / Strip') {
+          currentItem.piecesPerUnit = tpc > 1 ? tpc : 12
+          currentItem.unit = 'strip'
+        } else if (value === 'Single Tablet / Pc' || value === 'Single Tablet' || value === 'Loose/Single') {
+          currentItem.piecesPerUnit = 1
+          currentItem.unit = 'pcs'
+        }
+      } else {
+        if (value === 'Master Carton') {
+          currentItem.piecesPerUnit = selectedBatch?.piecesPerPack || (bpc * cpb)
+          currentItem.unit = 'carton'
+        } else if (value === 'Inner Box' || value === 'Small Box' || value === 'Box') {
+          currentItem.piecesPerUnit = cpb > 1 ? cpb : 10
+          currentItem.unit = 'box'
+        } else if (value === 'Single Unit / Bottle' || value === 'Single Unit' || value === 'Loose/Single') {
+          currentItem.piecesPerUnit = 1
+          currentItem.unit = 'pcs'
+        } else if (value === 'Standard Pack') {
+          currentItem.piecesPerUnit = selectedBatch?.piecesPerPack || 1
+          currentItem.unit = 'pack'
+        }
       }
     }
 
@@ -1087,6 +1230,13 @@ export function InventoryTransfer({ api, session, onNotice, refreshCoreData }) {
     // Strict batch and branch stock pre-check before dispatch
     for (let i = 0; i < transferForm.items.length; i++) {
       const item = transferForm.items[i]
+      const prod = products.find(p => String(p._id) === String(item.productId))
+      if (!item.batchId) {
+        return onNotice({
+          type: 'error',
+          text: `Please select a Batch for "${prod?.name || 'Item #' + (i + 1)}" before proceeding.`
+        })
+      }
       const totalPiecesNeeded = Number(item.quantity || 0) * Number(item.piecesPerUnit || 1)
       const selectedBatch = sourceBranchBatches.find(b => String(b._id) === String(item.batchId))
       
@@ -1385,16 +1535,23 @@ export function InventoryTransfer({ api, session, onNotice, refreshCoreData }) {
 
                 const productBatches = sourceBranchBatches.filter(b => String(b.product?._id || b.product) === String(item.productId))
                 const currentProd = products.find(p => String(p._id) === String(item.productId))
-                const isTabletCapsule = (currentProd?.itemType || selectedBatchObj?.product?.itemType) === 'TABLET_CAPSULE' || 
-                                       (currentProd?.category || '').toLowerCase() === 'medicine' ||
-                                       selectedBatchObj?.packType === 'Master Carton'
+                const itemType = currentProd?.itemType || selectedBatchObj?.product?.itemType || 'TABLET_CAPSULE'
+                const isTabletCapsule = itemType === 'TABLET_CAPSULE'
                 
                 const tpc = Number(currentProd?.tabletsPerCard || selectedBatchObj?.product?.tabletsPerCard || 12)
                 const cpb = Number(currentProd?.cardsPerBox || selectedBatchObj?.product?.cardsPerBox || 10)
                 const bpc = Number(currentProd?.boxesPerCarton || selectedBatchObj?.product?.boxesPerCarton || 20)
-                const cartonPieces = selectedBatchObj?.piecesPerPack || (bpc * cpb * tpc)
-                const boxPieces = cpb * tpc
+                
+                // Pieces calculations
+                const cartonPieces = selectedBatchObj?.piecesPerPack || (isTabletCapsule ? (bpc * cpb * tpc) : (bpc * cpb))
+                const boxPieces = isTabletCapsule ? (cpb * tpc) : cpb
                 const cardPieces = tpc
+
+                // Labels for units
+                const unitLabel = itemType === 'BOTTLE_SYRUP' ? 'Bottles' :
+                                  itemType === 'CREAM_TUBE' ? 'Tubes' :
+                                  itemType === 'INJECTION_VIAL' ? 'Vials' :
+                                  itemType === 'SURGICAL_DEVICE' ? 'Packs' : 'Units'
 
                 return (
                   <div key={idx} className="stack gap-2 p-3 panel-strong" style={{ borderRadius: '12px', border: isInsufficient ? '1px solid #ef4444' : '1px solid var(--border)' }}>
@@ -1418,14 +1575,19 @@ export function InventoryTransfer({ api, session, onNotice, refreshCoreData }) {
                       {/* Available Batches Dropdown */}
                       <div style={{ flex: 2, minWidth: '220px' }}>
                         <select
+                          required
                           className="input"
-                          style={{ width: '100%', borderColor: item.batchId ? 'var(--accent)' : 'var(--border)' }}
+                          style={{ width: '100%', borderColor: item.batchId ? 'var(--accent)' : '#ef4444' }}
                           value={item.batchId || ''}
                           onChange={(e) => updateItem(idx, 'batchId', e.target.value)}
                           disabled={!item.productId}
                         >
                           <option value="">
-                            {productBatches.length > 0 ? `-- Select Batch (${productBatches.length} Available) --` : '-- No Active Batches (Default) --'}
+                            {!transferForm.sourceBranch 
+                              ? '-- Please Select Source Branch First --' 
+                              : productBatches.length > 0 
+                                ? `-- Select Batch (${productBatches.length} Available) --` 
+                                : `-- No Active Batches in ${transferForm.sourceBranch} --`}
                           </option>
                           {productBatches.map(b => (
                             <option key={b._id} value={b._id}>
@@ -1446,23 +1608,22 @@ export function InventoryTransfer({ api, session, onNotice, refreshCoreData }) {
                         <span className="x-small muted">Packaging Unit:</span>
                         <select
                           className="input"
-                          style={{ minWidth: '150px' }}
-                          value={item.packType || (isTabletCapsule ? 'Master Carton' : 'Unit')}
+                          style={{ minWidth: '140px' }}
+                          value={item.packType || 'Master Carton'}
                           onChange={e => updateItem(idx, 'packType', e.target.value)}
                         >
                           {isTabletCapsule ? (
                             <>
-                              <option value="Master Carton">Master Carton ({cartonPieces} tabs)</option>
-                              <option value="Small Box">Small Box ({boxPieces} tabs)</option>
-                              <option value="Card / Strip">Card / Strip ({cardPieces} tabs)</option>
-                              <option value="Single Tablet / Pc">Single Tablet (1 tab)</option>
+                              <option value="Master Carton">Master Carton</option>
+                              <option value="Small Box">Small Box</option>
+                              <option value="Card / Strip">Card / Strip</option>
+                              <option value="Single Tablet">Single Tablet</option>
                             </>
                           ) : (
                             <>
-                              <option value="Standard Pack">
-                                {selectedBatchObj?.packType ? `${selectedBatchObj.packType} (${selectedBatchObj.piecesPerPack || 1} pcs)` : 'Standard Pack (1 pc)'}
-                              </option>
-                              <option value="Loose/Single">Loose / 1 Pc</option>
+                              <option value="Master Carton">Master Carton</option>
+                              <option value="Box">Box</option>
+                              <option value="Single Unit">Single Unit</option>
                             </>
                           )}
                         </select>
@@ -1486,12 +1647,21 @@ export function InventoryTransfer({ api, session, onNotice, refreshCoreData }) {
                           onChange={(e) => updateItem(idx, 'quantity', e.target.value)}
                         />
                         <span className="badge neutral x-small font-mono">
-                          = {totalPiecesNeeded} tablets
+                          = {totalPiecesNeeded} {unitLabel.toLowerCase()}
                         </span>
                       </div>
 
                       {/* Auto Calculated Cost & Selling Values */}
                       <div className="cluster gap-2 align-center ml-auto">
+                        <div className="stack" style={{ textAlign: 'right' }}>
+                          <span className="x-small muted">
+                            Unit Cost ({item.packType || 'Pack'}):
+                          </span>
+                          <span className="x-small font-mono muted">
+                            {formatCurrency(Number(item.costPrice || 0) * Number(item.piecesPerUnit || 1))}
+                          </span>
+                        </div>
+
                         <div className="stack" style={{ textAlign: 'right' }}>
                           <span className="x-small muted">Total Cost:</span>
                           <strong className="small font-mono">{formatCurrency(item.totalCost || 0)}</strong>
@@ -1506,10 +1676,10 @@ export function InventoryTransfer({ api, session, onNotice, refreshCoreData }) {
 
                     {item.productId && transferForm.sourceBranch && (
                       <div className="x-small" style={{ fontSize: '0.72rem', color: isInsufficient ? '#ef4444' : 'var(--text-soft)' }}>
-                        Branch Stock: <strong>{availablePieces !== null ? `${availablePieces} pcs` : 'Loading...'}</strong>
+                        Branch Stock: <strong>{availablePieces !== null ? `${availablePieces} ${unitLabel.toLowerCase()}` : 'Loading...'}</strong>
                         {item.batchNumber && (
                           <span>
-                            {' • '}Selected Batch: <strong>{item.batchNumber}</strong> ({selectedBatchObj ? `${selectedBatchObj.availableQuantity} tabs / ${Math.floor(selectedBatchObj.availableQuantity / Number(item.piecesPerUnit || 1))} max ${item.packType || 'packs'}` : ''})
+                            {' • '}Selected Batch: <strong>{item.batchNumber}</strong> ({selectedBatchObj ? `${selectedBatchObj.availableQuantity} ${unitLabel.toLowerCase()} available • ${selectedBatchObj.piecesPerPack || (isTabletCapsule ? cartonPieces : boxPieces)} ${unitLabel.toLowerCase()}/carton` : ''})
                           </span>
                         )}
                         {item.expiryDate && <span> • Exp: <strong>{new Date(item.expiryDate).toLocaleDateString()}</strong></span>}
@@ -1922,10 +2092,42 @@ export function InventoryTransfer({ api, session, onNotice, refreshCoreData }) {
                                         <span className="text-success font-bold" style={{ fontSize: '0.65rem' }}>
                                           ✓ {tr.inspectionDecision === 'PARTIAL' ? 'Received (With Damage Quarantined)' : 'Fully Received'}
                                         </span>
-                                        {tr.items && tr.items.some(it => (it.damagedPackQuantity || 0) > 0 || (it.rejectedQuantity || 0) > 0) && (
+                                        {tr.items && tr.items.some(it => (Number(it.shortagePackQuantity) > 0 || (Number(it.packQuantity || 0) > Number(it.receivedPackQuantity !== undefined ? it.receivedPackQuantity : it.packQuantity)))) && (
                                           <button
                                             type="button"
                                             className="badge warning small font-mono"
+                                            style={{
+                                              fontSize: '0.65rem',
+                                              background: '#fff7ed',
+                                              color: '#c2410c',
+                                              borderColor: '#fed7aa',
+                                              cursor: 'pointer',
+                                              display: 'inline-flex',
+                                              alignItems: 'center',
+                                              gap: '3px',
+                                              padding: '2px 6px',
+                                              borderRadius: '6px'
+                                            }}
+                                            onClick={() => setViewingInspectionModal({
+                                              transfer: t,
+                                              trip: tr,
+                                              tripIndex: trIdx
+                                            })}
+                                            title="Click to view Transit Shortage details"
+                                          >
+                                            <ShieldAlert size={11} />
+                                            Shortage: {tr.items.reduce((acc, it) => {
+                                              const disp = Number(it.packQuantity || 0)
+                                              const arr = it.receivedPackQuantity !== undefined ? Number(it.receivedPackQuantity) : disp
+                                              return acc + (it.shortagePackQuantity !== undefined ? Number(it.shortagePackQuantity) : Math.max(0, disp - arr))
+                                            }, 0)} {tr.items[0]?.packType || 'Carton'}
+                                            <Eye size={10} style={{ marginLeft: '2px' }} />
+                                          </button>
+                                        )}
+                                        {tr.items && tr.items.some(it => (Number(it.damagedPackQuantity) > 0 || Number(it.damagedQuantity) > 0)) && (
+                                          <button
+                                            type="button"
+                                            className="badge danger small font-mono"
                                             style={{
                                               fontSize: '0.65rem',
                                               background: '#fef2f2',
@@ -1946,7 +2148,7 @@ export function InventoryTransfer({ api, session, onNotice, refreshCoreData }) {
                                             title="Click to view Quarantine & Inspection record"
                                           >
                                             <ShieldAlert size={11} />
-                                            Quarantined: {tr.items.reduce((acc, it) => acc + (Number(it.damagedPackQuantity) || (Number(it.rejectedQuantity || 0) / Number(it.piecesPerPack || 1))), 0)} {tr.items[0]?.packType || 'Carton'}
+                                            Quarantined: {tr.items.reduce((acc, it) => acc + (Number(it.damagedPackQuantity) || (it.damagedQuantity ? Number(it.damagedQuantity) / Number(it.piecesPerPack || 1) : 0)), 0)} {tr.items[0]?.packType || 'Carton'}
                                             <Eye size={10} style={{ marginLeft: '2px' }} />
                                           </button>
                                         )}
@@ -2145,11 +2347,14 @@ export function InventoryTransfer({ api, session, onNotice, refreshCoreData }) {
               </span>
 
               {inspectingTrip.items.map((item, iIdx) => {
-                const arrived = Number(item.receivedPackQuantity || 0)
+                const dispatched = Number(item.dispatchedPackQuantity || 0)
+                const arrived = Number(item.receivedPackQuantity !== undefined ? item.receivedPackQuantity : dispatched)
                 const damaged = Number(item.damagedPackQuantity || 0)
+                const shortage = Math.max(0, dispatched - arrived)
                 const accepted = Math.max(0, arrived - damaged)
                 const totalAcceptedUnits = accepted * (item.piecesPerPack || 1)
                 const totalDamagedUnits = damaged * (item.piecesPerPack || 1)
+                const totalShortageUnits = shortage * (item.piecesPerPack || 1)
 
                 return (
                   <div 
@@ -2157,7 +2362,7 @@ export function InventoryTransfer({ api, session, onNotice, refreshCoreData }) {
                     className="stack gap-3" 
                     style={{ 
                       borderRadius: '14px', 
-                      border: damaged > 0 ? '2px solid #ef4444' : '1px solid #cbd5e1',
+                      border: damaged > 0 ? '2px solid #ef4444' : shortage > 0 ? '2px solid #f97316' : '1px solid #cbd5e1',
                       background: '#f8fafc',
                       padding: '16px'
                     }}
@@ -2174,7 +2379,7 @@ export function InventoryTransfer({ api, session, onNotice, refreshCoreData }) {
                       </span>
                     </div>
 
-                    <div className="grid-3 gap-3 pt-2" style={{ borderTop: '1px dashed #cbd5e1' }}>
+                    <div className="grid-4 gap-3 pt-2" style={{ borderTop: '1px dashed #cbd5e1' }}>
                       <div className="stack gap-1">
                         <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#334155' }}>1. Arrived Packs:</span>
                         <input
@@ -2205,8 +2410,18 @@ export function InventoryTransfer({ api, session, onNotice, refreshCoreData }) {
                         </span>
                       </div>
 
+                      <div className="stack gap-1" style={{ background: shortage > 0 ? '#fff7ed' : '#f8fafc', padding: '8px 12px', borderRadius: '10px', border: shortage > 0 ? '1px solid #fed7aa' : '1px solid #e2e8f0' }}>
+                        <span style={{ fontSize: '0.75rem', fontWeight: 700, color: shortage > 0 ? '#ea580c' : '#64748b' }}>2. Transit Shortage:</span>
+                        <div style={{ fontSize: '1.2rem', fontWeight: 800, color: shortage > 0 ? '#ea580c' : '#64748b' }}>
+                          {shortage} <span style={{ fontSize: '0.75rem', fontWeight: 600 }}>{item.packType}</span>
+                        </div>
+                        <span className="x-small font-mono" style={{ color: shortage > 0 ? '#c2410c' : '#94a3b8', fontWeight: shortage > 0 ? 700 : 'normal' }}>
+                          {shortage > 0 ? `⚠️ ${totalShortageUnits} tabs missing` : 'All arrived'}
+                        </span>
+                      </div>
+
                       <div className="stack gap-1">
-                        <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#dc2626' }}>2. Damaged Packs:</span>
+                        <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#dc2626' }}>3. Damaged Packs:</span>
                         <input
                           type="number"
                           min="0"
@@ -2239,10 +2454,10 @@ export function InventoryTransfer({ api, session, onNotice, refreshCoreData }) {
                         </span>
                       </div>
 
-                      <div className="stack gap-1" style={{ background: '#ecfdf5', padding: '10px 14px', borderRadius: '10px', border: '1px solid #a7f3d0' }}>
-                        <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#047857' }}>Net Accepted:</span>
-                        <div style={{ fontSize: '1.3rem', fontWeight: 800, color: accepted > 0 ? '#059669' : '#dc2626' }}>
-                          {accepted} <span style={{ fontSize: '0.8rem', fontWeight: 600 }}>{item.packType}</span>
+                      <div className="stack gap-1" style={{ background: '#ecfdf5', padding: '8px 12px', borderRadius: '10px', border: '1px solid #a7f3d0' }}>
+                        <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#047857' }}>4. Net Accepted:</span>
+                        <div style={{ fontSize: '1.2rem', fontWeight: 800, color: accepted > 0 ? '#059669' : '#dc2626' }}>
+                          {accepted} <span style={{ fontSize: '0.75rem', fontWeight: 600 }}>{item.packType}</span>
                         </div>
                         <span className="x-small font-mono" style={{ color: '#047857', fontWeight: 600 }}>
                           = {totalAcceptedUnits} units added
@@ -2495,6 +2710,7 @@ export function InventoryTransfer({ api, session, onNotice, refreshCoreData }) {
                               <th style={{ padding: '8px 12px' }}>Product</th>
                               <th style={{ padding: '8px 12px', textAlign: 'center' }}>Dispatched</th>
                               <th style={{ padding: '8px 12px', textAlign: 'center' }}>Arrived</th>
+                              <th style={{ padding: '8px 12px', textAlign: 'center', color: '#ea580c' }}>Transit Shortage</th>
                               <th style={{ padding: '8px 12px', textAlign: 'center', color: '#dc2626' }}>Damaged (Quarantine)</th>
                               <th style={{ padding: '8px 12px', textAlign: 'center', color: '#059669' }}>Net Accepted</th>
                             </tr>
@@ -2517,9 +2733,21 @@ export function InventoryTransfer({ api, session, onNotice, refreshCoreData }) {
                                   <td style={{ padding: '8px 12px', textAlign: 'center', fontWeight: 600 }}>
                                     {q.arrivedPacks} {q.packType}
                                   </td>
-                                  <td style={{ padding: '8px 12px', textAlign: 'center', background: q.damagedPacks > 0 ? '#fef2f2' : 'transparent', color: '#dc2626', fontWeight: 800 }}>
-                                    {q.damagedPacks} {q.packType}
-                                    <div style={{ fontSize: '0.68rem', fontWeight: 600 }}>({q.quarantinedUnits} units)</div>
+                                  <td style={{ padding: '8px 12px', textAlign: 'center', background: q.shortagePacks > 0 ? '#fff7ed' : 'transparent', color: q.shortagePacks > 0 ? '#ea580c' : '#94a3b8', fontWeight: q.shortagePacks > 0 ? 800 : 500 }}>
+                                    {q.shortagePacks > 0 ? (
+                                      <>
+                                        {q.shortagePacks} {q.packType}
+                                        <div style={{ fontSize: '0.68rem', fontWeight: 600 }}>({q.shortageUnits} missing)</div>
+                                      </>
+                                    ) : '—'}
+                                  </td>
+                                  <td style={{ padding: '8px 12px', textAlign: 'center', background: q.damagedPacks > 0 ? '#fef2f2' : 'transparent', color: q.damagedPacks > 0 ? '#dc2626' : '#94a3b8', fontWeight: q.damagedPacks > 0 ? 800 : 500 }}>
+                                    {q.damagedPacks > 0 ? (
+                                      <>
+                                        {q.damagedPacks} {q.packType}
+                                        <div style={{ fontSize: '0.68rem', fontWeight: 600 }}>({q.quarantinedUnits} quarantined)</div>
+                                      </>
+                                    ) : '0'}
                                   </td>
                                   <td style={{ padding: '8px 12px', textAlign: 'center', background: '#ecfdf5', color: '#059669', fontWeight: 800 }}>
                                     {q.acceptedPacks} {q.packType}

@@ -21,6 +21,7 @@ import {
   AlertCircle,
   Trash2,
   Download,
+  ShieldAlert,
 } from 'lucide-react'
 import { SectionHeading } from '../../components/SectionHeading'
 import { formatCurrency, exportToCSV, getBaseUrl } from '../../utils'
@@ -366,6 +367,24 @@ export function Inventory({
                           {product.quantityInStock}
                         </span>
                         <span className="muted small">{product.unit}</span>
+                        {Number(product.quarantinedStock || 0) > 0 && (
+                          <span 
+                            className="badge danger x-small font-bold mt-1 cluster gap-1 align-center" 
+                            style={{ 
+                              background: '#fef2f2', 
+                              color: '#dc2626', 
+                              border: '1px solid #fecaca', 
+                              borderRadius: '6px',
+                              padding: '2px 6px',
+                              fontSize: '0.68rem',
+                              width: 'fit-content'
+                            }}
+                            title={`Damaged in transit & strictly segregated in quarantine: ${product.quarantinedStock} ${product.unit}`}
+                          >
+                            <ShieldAlert size={10} />
+                            {product.quarantinedStock} {product.unit} Quarantined
+                          </span>
+                        )}
                       </div>
                     </td>
                     <td>
@@ -446,6 +465,78 @@ export function Inventory({
                                   </div>
                                 ))}
                               </div>
+
+                              {/* Quarantined Segregation Badge if damaged goods exist */}
+                              {Number(product.quarantinedStock || 0) > 0 && (
+                                <div 
+                                  className="panel p-3 stack gap-2" 
+                                  style={{ 
+                                    background: '#fef2f2', 
+                                    border: '1px solid #f87171', 
+                                    borderRadius: '10px' 
+                                  }}
+                                >
+                                  <div className="between align-center">
+                                    <div className="cluster gap-2 align-center">
+                                      <ShieldAlert size={18} style={{ color: '#dc2626' }} />
+                                      <div className="stack" style={{ gap: '2px' }}>
+                                        <strong style={{ fontSize: '0.85rem', color: '#991b1b' }}>QUARANTINED TRANSIT DAMAGE</strong>
+                                        <span className="x-small muted" style={{ color: '#b91c1c' }}>
+                                          Damaged units held under quarantine (NOT added to branch saleable stocks)
+                                        </span>
+                                      </div>
+                                    </div>
+                                    <span className="badge danger font-mono font-bold" style={{ fontSize: '0.85rem', padding: '4px 10px' }}>
+                                      {product.quarantinedStock} {product.unit} Quarantined
+                                    </span>
+                                  </div>
+
+                                  {/* Packaging Breakdown Tags */}
+                                  {(product.quarantineBatches || []).length > 0 && (
+                                    <div className="cluster gap-2 align-center flex-wrap pt-1" style={{ borderTop: '1px dashed #fca5a5' }}>
+                                      {product.quarantineBatches.map((qb, qbIdx) => {
+                                        const isTablet = product.itemType === 'TABLET_CAPSULE';
+                                        const tpc = Number(product.tabletsPerCard || 12);
+                                        const cpb = Number(product.cardsPerBox || 10);
+                                        const bpc = Number(product.boxesPerCarton || 20);
+                                        const boxPcs = isTablet ? (cpb * tpc) : cpb;
+                                        const rawBoxes = boxPcs > 0 ? (qb.quarantinedUnits / boxPcs) : 0;
+                                        const totalBoxes = Number.isInteger(rawBoxes) ? rawBoxes : rawBoxes.toFixed(1);
+                                        const isCarton = qb.packType === 'Master Carton';
+
+                                        return (
+                                          <div 
+                                            key={qbIdx} 
+                                            className="cluster gap-2 align-center p-2 rounded"
+                                            style={{ background: '#ffffff', border: '1px solid #fca5a5', fontSize: '0.75rem' }}
+                                          >
+                                            <span className="badge neutral font-mono font-bold" style={{ background: '#fee2e2', color: '#991b1b' }}>
+                                              Batch {qb.batchNumber}
+                                            </span>
+                                            <span className="font-strong" style={{ color: '#0f172a' }}>
+                                              📍 {qb.branch}
+                                            </span>
+                                            <span className="badge neutral" style={{ background: '#f1f5f9', color: '#334155', fontWeight: 600 }}>
+                                              {isCarton 
+                                                ? `📦 ${qb.damagedPacks} Master Carton (${bpc} boxes/carton)`
+                                                : `📦 ${qb.damagedPacks} ${qb.packType}`
+                                              }
+                                            </span>
+                                            {boxPcs > 0 && (
+                                              <span className="badge warning" style={{ background: '#fef3c7', color: '#92400e', fontWeight: 700 }}>
+                                                = {totalBoxes} Boxes ({boxPcs} {product.unit}/box)
+                                              </span>
+                                            )}
+                                            <span className="font-mono font-bold" style={{ color: '#dc2626' }}>
+                                              = {qb.quarantinedUnits} {product.unit}
+                                            </span>
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
                             </div>
                           )}
 
@@ -574,6 +665,67 @@ export function Inventory({
                                         </td>
                                       </tr>
                                     )
+                                  })}
+
+                                  {/* Quarantined Batch Entries in Table */}
+                                  {(product.quarantineBatches || []).map((qb, qbIdx) => {
+                                    const isTablet = product.itemType === 'TABLET_CAPSULE';
+                                    const tpc = Number(product.tabletsPerCard || 12);
+                                    const cpb = Number(product.cardsPerBox || 10);
+                                    const bpc = Number(product.boxesPerCarton || 20);
+                                    const boxPcs = isTablet ? (cpb * tpc) : cpb;
+                                    const rawBoxes = boxPcs > 0 ? (qb.quarantinedUnits / boxPcs) : 0;
+                                    const totalBoxes = Number.isInteger(rawBoxes) ? rawBoxes : rawBoxes.toFixed(1);
+                                    const isCarton = qb.packType === 'Master Carton';
+
+                                    return (
+                                      <tr key={`qb-${qbIdx}`} style={{ background: '#fef2f2' }}>
+                                        <td style={{ padding: '8px 12px' }}>
+                                          <div className="cluster gap-2 align-center">
+                                            <ShieldAlert size={14} style={{ color: '#dc2626' }} />
+                                            <strong className="font-mono" style={{ color: '#dc2626' }}>{qb.batchNumber}</strong>
+                                          </div>
+                                        </td>
+                                        <td>
+                                          <span className="x-small muted font-mono">
+                                            {qb.expiryDate ? new Date(qb.expiryDate).toLocaleDateString() : 'N/A'}
+                                          </span>
+                                        </td>
+                                        <td>
+                                          <div className="stack" style={{ gap: '2px' }}>
+                                            <span className="pill danger-soft small" style={{ background: '#fee2e2', color: '#991b1b', border: 'none', fontWeight: 700 }}>
+                                              {isCarton ? `${qb.damagedPacks} Master Carton` : `${qb.damagedPacks} ${qb.packType}`}
+                                            </span>
+                                            <span className="x-small font-mono muted" style={{ fontSize: '0.7rem' }}>
+                                              {isCarton ? `(${bpc} bxs/carton • ${totalBoxes} boxes)` : `(${boxPcs} ${product.unit}/box)`}
+                                            </span>
+                                          </div>
+                                        </td>
+                                        <td>
+                                          <div className="stack" style={{ gap: '1px' }}>
+                                            <strong style={{ fontSize: '0.95rem', color: '#dc2626' }}>
+                                              {qb.quarantinedUnits}
+                                            </strong>
+                                            <span className="x-small muted">
+                                              = {totalBoxes} Boxes ({product.unit})
+                                            </span>
+                                          </div>
+                                        </td>
+                                        <td>{formatCurrency(product.costPrice)}</td>
+                                        <td>{formatCurrency(product.price)}</td>
+                                        <td>
+                                          <span className="pill danger-soft small" style={{ fontWeight: 700 }}>{qb.branch} (Quarantine)</span>
+                                        </td>
+                                        <td>
+                                          <span className="pill danger small font-bold" style={{ background: '#ef4444', color: '#ffffff' }}>
+                                            QUARANTINED
+                                          </span>
+                                        </td>
+                                        <td style={{ textAlign: 'right', paddingRight: '12px' }}>
+                                          <span className="x-small font-bold" style={{ color: '#dc2626' }}>Non-Saleable</span>
+                                        </td>
+                                      </tr>
+                                    );
                                   })}
                                 </tbody>
                               </table>

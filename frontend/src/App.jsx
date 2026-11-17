@@ -281,11 +281,11 @@ function App() {
   }, [notice])
 
   useEffect(() => {
-    if (products.length > 0 && unreadCount > 0 && !hasShownPopup) {
+    if (products.length > 0 && unreadCount > 0 && !hasShownPopup && !notice) {
       setNotice({ type: 'warning', text: `You have ${unreadCount} items low on stock. Check notifications.` })
       setHasShownPopup(true)
     }
-  }, [products.length, unreadCount, hasShownPopup])
+  }, [products.length, unreadCount, hasShownPopup, notice])
 
   useEffect(() => {
     if (!session?.token) return
@@ -529,7 +529,12 @@ function App() {
     }
   }
 
-  function handleLogout() {
+  async function handleLogout() {
+    try {
+      await localforage.clear()
+    } catch (e) {
+      console.error('Error clearing localforage on logout', e)
+    }
     setSession(null)
     setOverview(null)
     setProducts([])
@@ -738,6 +743,13 @@ function App() {
       formData.append('category', productForm.category);
       formData.append('description', productForm.description);
       formData.append('unit', productForm.unit);
+      formData.append('itemType', productForm.itemType || 'TABLET_CAPSULE');
+      formData.append('tabletsPerCard', productForm.tabletsPerCard || '1');
+      formData.append('cardsPerBox', productForm.cardsPerBox || '1');
+      formData.append('boxesPerCarton', productForm.boxesPerCarton || '1');
+      formData.append('piecesPerPack', productForm.piecesPerPack || '1');
+      formData.append('defaultPackType', productForm.defaultPackType || 'Carton');
+      formData.append('volumeOrWeight', productForm.volumeOrWeight || '');
       formData.append('price', productForm.price);
       formData.append('costPrice', productForm.costPrice);
       formData.append('loyaltyDiscount', productForm.loyaltyDiscount);
@@ -972,7 +984,7 @@ function App() {
           setTheme={setTheme}
           setIsSidebarOpen={setIsSidebarOpen}
         />
-        <NoticeBanner notice={notice} />
+        <NoticeBanner notice={notice} onClose={() => setNotice(null)} />
 
         {pageLoading && (
           <div className="panel loading-state">

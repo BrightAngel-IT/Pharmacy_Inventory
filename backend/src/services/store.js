@@ -291,30 +291,31 @@ async function seedDatabase() {
     await Branch.insertMany(branches);
   }
 
-  const branchStockCount = await BranchStock.countDocuments();
-  if (branchStockCount === 0) {
-    const allProducts = await Product.find().lean();
-    const branchStocks = [];
-    allProducts.forEach(p => {
-      branchStocks.push({
-        branch: 'Main Warehouse',
-        productId: p._id,
-        quantityInStock: p.quantityInStock,
-        reorderLevel: p.reorderLevel,
-        rack: p.rack,
-      });
-      branchStocks.push({
-        branch: 'Counter 01',
-        productId: p._id,
-        quantityInStock: Math.max(0, Math.floor(p.quantityInStock / 2)),
-        reorderLevel: p.reorderLevel,
-        rack: p.rack,
-      });
-    });
-    if (branchStocks.length > 0) {
-      await BranchStock.insertMany(branchStocks);
-    }
-  }
+  // Do not auto-seed dummy grocery branches or stocks
+  // const branchStockCount = await BranchStock.countDocuments();
+  // if (branchStockCount === 0) {
+  //   const allProducts = await Product.find().lean();
+  //   const branchStocks = [];
+  //   allProducts.forEach(p => {
+  //     branchStocks.push({
+  //       branch: 'Main Warehouse',
+  //       productId: p._id,
+  //       quantityInStock: p.quantityInStock,
+  //       reorderLevel: p.reorderLevel,
+  //       rack: p.rack,
+  //     });
+  //     branchStocks.push({
+  //       branch: 'Counter 01',
+  //       productId: p._id,
+  //       quantityInStock: Math.max(0, Math.floor(p.quantityInStock / 2)),
+  //       reorderLevel: p.reorderLevel,
+  //       rack: p.rack,
+  //     });
+  //   });
+  //   if (branchStocks.length > 0) {
+  //     await BranchStock.insertMany(branchStocks);
+  //   }
+  // }
 }
 
 async function initializeStore() {
@@ -439,6 +440,8 @@ async function getProducts(filters = {}) {
 
   let branchStocks = [];
   let branchBatches = [];
+  const quarantineMap = new Map(); // prodId -> { totalQuarantine: number, byBranch: { [branch]: number } }
+
   if (isDatabaseReady()) {
     if (branchName) {
       const normalizedBranch = String(branchName).toLowerCase();
@@ -458,6 +461,68 @@ async function getProducts(filters = {}) {
         status: 'ACTIVE',
         availableQuantity: { $gt: 0 }
       }).sort({ expiryDate: 1 }).lean();
+    }
+
+    // Aggregate transit damage / quarantined stock from all transfer inspection trips
+    try {
+      const allTransfers = await Transfer.find({
+        'transports.items': { $exists: true }
+      }).lean();
+
+      allTransfers.forEach(trf => {
+        (trf.transports || []).forEach(tr => {
+          (tr.items || []).forEach(it => {
+            const prodId = String(it.product);
+            const mainProd = (trf.products || []).find(p => String(p.product) === prodId);
+            const piecesPerPack = Number(it.piecesPerPack || mainProd?.piecesPerPack || 1);
+            
+            // Only count actual damaged units into quarantine (NOT missing/shortage items)
+            const qUnits = Number(
+              it.damagedQuantity !== undefined && it.damagedQuantity !== null
+                ? it.damagedQuantity
+                : (Number(it.damagedPackQuantity || 0) * piecesPerPack)
+            );
+
+            if (qUnits > 0) {
+              if (!quarantineMap.has(prodId)) {
+                quarantineMap.set(prodId, { totalQuarantine: 0, byBranch: {}, batches: [] });
+              }
+              const qEntry = quarantineMap.get(prodId);
+              const branchKey = trf.destBranch || 'Quarantine';
+              
+              if (!branchName || String(branchName).toLowerCase() === branchKey.toLowerCase() || String(branchName).toLowerCase() === String(trf.sourceBranch).toLowerCase()) {
+                qEntry.totalQuarantine += qUnits;
+              }
+              qEntry.byBranch[branchKey] = (qEntry.byBranch[branchKey] || 0) + qUnits;
+
+              // Find batch and packaging information
+              const batchNo = it.batchNumber || mainProd?.batchNumber || 'N/A';
+              const expDate = it.expiryDate || mainProd?.expiryDate || null;
+              const packType = it.packType || mainProd?.packType || 'Master Carton';
+              const damagedPacks = Number(piecesPerPack > 0 ? (qUnits / piecesPerPack) : (it.damagedPackQuantity || 0));
+              
+              const existingBatchEntry = qEntry.batches.find(b => b.batchNumber === batchNo && b.branch === branchKey && b.packType === packType);
+              if (existingBatchEntry) {
+                existingBatchEntry.quarantinedUnits += qUnits;
+                existingBatchEntry.damagedPacks += damagedPacks;
+              } else {
+                qEntry.batches.push({
+                  batchNumber: batchNo,
+                  expiryDate: expDate,
+                  branch: branchKey,
+                  packType: packType,
+                  piecesPerPack: piecesPerPack,
+                  damagedPacks: damagedPacks,
+                  quarantinedUnits: qUnits,
+                  tripNumber: tr.tripNumber || 'Trip'
+                });
+              }
+            }
+          });
+        });
+      });
+    } catch (qErr) {
+      console.error('Error calculating quarantine stock:', qErr);
     }
   } else {
     if (branchName) {
@@ -557,6 +622,11 @@ async function getProducts(filters = {}) {
         ? primaryBatch.costPricePerUnit
         : Number(product.costPrice || 0);
 
+      const qInfo = quarantineMap.get(String(product._id));
+      const quarantinedStock = qInfo ? qInfo.totalQuarantine : 0;
+      const quarantineBranches = qInfo ? qInfo.byBranch : {};
+      const quarantineBatches = qInfo ? qInfo.batches : [];
+
       return {
         ...product,
         price: effectiveSellingPrice,
@@ -566,6 +636,9 @@ async function getProducts(filters = {}) {
         activeBatch: primaryBatch,
         batches: activeBatches,
         quantityInStock: finalQuantity,
+        quarantinedStock: quarantinedStock,
+        quarantineBranches: quarantineBranches,
+        quarantineBatches: quarantineBatches,
         reorderLevel: finalReorder,
         rack: finalRack,
         rackLabel: getRackLabel(finalRack),
@@ -597,6 +670,13 @@ async function saveProduct(payload) {
     category: String(payload.category || '').trim(),
     description: String(payload.description || '').trim(),
     unit: String(payload.unit || 'pcs').trim(),
+    itemType: String(payload.itemType || 'TABLET_CAPSULE').trim(),
+    tabletsPerCard: Number(payload.tabletsPerCard || 12),
+    cardsPerBox: Number(payload.cardsPerBox || 10),
+    boxesPerCarton: Number(payload.boxesPerCarton || 20),
+    defaultPackType: String(payload.defaultPackType || 'Carton').trim(),
+    piecesPerPack: Number(payload.piecesPerPack || 1),
+    volumeOrWeight: String(payload.volumeOrWeight || '').trim(),
     price: Number(payload.price || 0),
     costPrice: Number(payload.costPrice || 0),
     loyaltyDiscount: Number(payload.loyaltyDiscount || 0),
@@ -1406,24 +1486,6 @@ function getRangeStart(range) {
 async function getSalesReport(range = 'weekly', branchFilter = null, customStartDate = null, customEndDate = null) {
   const sales = await getAllSales();
   const products = await getAllProducts();
-  const todayProductSalesMap = new Map();
-  salesToday.forEach((sale) => {
-    sale.items.forEach((item) => {
-      if (!todayProductSalesMap.has(item.productId)) {
-        todayProductSalesMap.set(item.productId, {
-          productId: item.productId,
-          name: item.name,
-          quantity: 0,
-          revenue: 0,
-          image: item.image,
-          rackLabel: getRackLabel(item.rack),
-        });
-      }
-      const entry = todayProductSalesMap.get(item.productId);
-      entry.quantity += Number(item.quantity);
-      entry.revenue = formatCurrencyAmount(entry.revenue + Number(item.lineTotal));
-    });
-  });
 
   const productSalesMap = new Map();
   const validRange = ['daily', 'weekly', 'monthly', 'annual', 'custom'].includes(range) ? range : 'weekly';
@@ -2324,6 +2386,9 @@ async function createPurchase(payload) {
         branch: branchName,
         packType: item.packType,
         piecesPerPack: item.piecesPerPack,
+        tabletsPerCard: Number(item.tabletsPerCard || 1),
+        cardsPerBox: Number(item.cardsPerBox || 1),
+        boxesPerCarton: Number(item.boxesPerCarton || 1),
         initialPacks: item.packQuantity,
         initialQuantity: item.quantity,
         availableQuantity: item.quantity,
@@ -2519,6 +2584,9 @@ async function receiveTripTransfer({ transferId, tripIndex, user, decision = 'AC
         if (isRejected) {
           tItem.receivedPackQuantity = 0;
           tItem.damagedPackQuantity = 0;
+          tItem.damagedQuantity = 0;
+          tItem.shortagePackQuantity = dispatchedPacks;
+          tItem.shortageQuantity = Number(tItem.quantity || (dispatchedPacks * piecesPerPack));
           tItem.acceptedPackQuantity = 0;
           tItem.acceptedQuantity = 0;
           tItem.rejectedQuantity = Number(tItem.quantity || (dispatchedPacks * piecesPerPack));
@@ -2528,25 +2596,33 @@ async function receiveTripTransfer({ transferId, tripIndex, user, decision = 'AC
 
         // Custom inspected quantities
         const arrivedPacks = itemInspection.receivedPackQuantity !== undefined
-          ? Number(itemInspection.receivedPackQuantity)
+          ? Math.max(0, Number(itemInspection.receivedPackQuantity))
           : dispatchedPacks;
         const damagedPacks = itemInspection.damagedPackQuantity !== undefined
           ? Math.max(0, Number(itemInspection.damagedPackQuantity))
           : 0;
 
+        // Segregate shortage vs damaged
+        const shortagePacks = Math.max(0, dispatchedPacks - arrivedPacks);
+        const shortageUnits = shortagePacks * piecesPerPack;
+        const damagedUnits = damagedPacks * piecesPerPack;
+
         // Accepted packs = arrived - damaged
         const acceptedPacks = Math.max(0, arrivedPacks - damagedPacks);
         const acceptedUnits = acceptedPacks * piecesPerPack;
-        const rejectedUnits = Math.max(0, (dispatchedPacks * piecesPerPack) - acceptedUnits);
+        const totalVarianceUnits = shortageUnits + damagedUnits;
 
         tItem.receivedPackQuantity = arrivedPacks;
         tItem.damagedPackQuantity = damagedPacks;
+        tItem.damagedQuantity = damagedUnits;
+        tItem.shortagePackQuantity = shortagePacks;
+        tItem.shortageQuantity = shortageUnits;
         tItem.acceptedPackQuantity = acceptedPacks;
         tItem.acceptedQuantity = acceptedUnits;
-        tItem.rejectedQuantity = rejectedUnits;
+        tItem.rejectedQuantity = totalVarianceUnits;
 
         totalAcceptedInTrip += acceptedUnits;
-        totalRejectedInTrip += rejectedUnits;
+        totalRejectedInTrip += totalVarianceUnits;
 
         // Only add strictly ACCEPTED units into Destination Branch Stock
         if (acceptedUnits > 0) {

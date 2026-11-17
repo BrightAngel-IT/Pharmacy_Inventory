@@ -41,8 +41,20 @@ const batchSchema = new mongoose.Schema(
     },
     piecesPerPack: {
       type: Number,
-      default: 1, // e.g. 100 tablets per pack
+      default: 1, // Total pieces per master carton / pack
       min: 1,
+    },
+    tabletsPerCard: {
+      type: Number,
+      default: 1, // e.g. 12 tabs per card
+    },
+    cardsPerBox: {
+      type: Number,
+      default: 1, // e.g. 10 cards per box, or 10 bottles per box
+    },
+    boxesPerCarton: {
+      type: Number,
+      default: 1, // e.g. 20 boxes per master carton
     },
     initialPacks: {
       type: Number,
