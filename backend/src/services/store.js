@@ -2455,8 +2455,8 @@ async function createPurchase(payload) {
 
 async function transferInventory({ sourceBranch, destBranch, products, transports = [] }) {
   if (isDatabaseReady()) {
-    const updatePromises = products.map(async (item) => {
-      // Check stock in source branch first
+    // Validate that source branch has sufficient stock for all requested items
+    const validatePromises = products.map(async (item) => {
       const sourceStock = await BranchStock.findOne({ branch: sourceBranch, productId: item.product });
       const currentStock = sourceStock ? sourceStock.quantityInStock : 0;
       if (currentStock < item.quantity) {
@@ -2464,46 +2464,28 @@ async function transferInventory({ sourceBranch, destBranch, products, transport
         const prodName = prod ? prod.name : item.product;
         throw createError(`Insufficient stock in ${sourceBranch} for "${prodName}". Available stock: ${currentStock} pcs, but requested: ${item.quantity} pcs.`);
       }
-
-      // Subtract from source branch immediately (dispatched)
-      await BranchStock.findOneAndUpdate(
-        { branch: sourceBranch, productId: item.product },
-        { $inc: { quantityInStock: -Number(item.quantity) } }
-      );
-
-      // If a specific Batch was chosen, deduct from Batch availableQuantity as well!
-      if (item.batchId) {
-        try {
-          const Batch = require('../models/Batch');
-          await Batch.findByIdAndUpdate(item.batchId, {
-            $inc: { availableQuantity: -Number(item.quantity) }
-          });
-        } catch (bErr) {
-          console.error('Error updating batch quantity during transfer:', bErr);
-        }
-      }
-      // NOTE: Destination branch stock will ONLY be credited when confirmed/received by destination branch
     });
 
-    await Promise.all(updatePromises);
+    await Promise.all(validatePromises);
 
     // Filter valid transports if any
     const validTransports = Array.isArray(transports) 
       ? transports
-          .filter(t => t && (t.vehicleNumber || t.driverName || t.dispatchedQty || t.notes))
+          .filter(t => t && (t.vehicleNumber || t.driverName || t.dispatchedQty || t.notes || (t.items && t.items.length > 0)))
           .map(t => ({
             ...t,
-            status: 'IN_TRANSIT'
+            status: 'READY_TO_DISPATCH' // Tripps start in READY_TO_DISPATCH until "Start Trip" is clicked!
           }))
       : [];
 
-    // Save transfer record in IN_TRANSIT status
+    // Save transfer record in READY_TO_DISPATCH / IN_TRANSIT status
+    // Stock is NOT deducted yet! Stock will be deducted per trip when "Start Trip" is clicked.
     const transfer = await Transfer.create({
       sourceBranch,
       destBranch,
       products,
       transports: validTransports,
-      status: 'IN_TRANSIT'
+      status: 'READY_TO_DISPATCH'
     });
 
     return transfer;
@@ -2514,8 +2496,6 @@ async function transferInventory({ sourceBranch, destBranch, products, transport
       if (!sourceBs || sourceBs.quantityInStock < item.quantity) {
         throw createError(`Insufficient stock in source branch for product ID ${item.product}.`);
       }
-      sourceBs.quantityInStock -= Number(item.quantity);
-      sourceBs.updatedAt = new Date().toISOString();
     });
 
     if (!memoryStore.transfers) memoryStore.transfers = [];
@@ -2561,6 +2541,10 @@ async function receiveTripTransfer({ transferId, tripIndex, user, decision = 'AC
     const trip = transfer.transports[tripIndex];
     if (trip.status === 'RECEIVED' || trip.status === 'REJECTED') {
       throw createError(`This trip has already been processed (${trip.status}).`, 400);
+    }
+
+    if (!trip.tripStartedAt && trip.status !== 'IN_TRANSIT') {
+      throw createError(`Cannot inspect or receive this trip yet. The source branch (${transfer.sourceBranch}) must click "Start Trip" to dispatch the vehicle first!`, 400);
     }
 
     const isRejected = decision === 'REJECTED';
@@ -2926,13 +2910,36 @@ async function cancelTransfer({ transferId, user, reason = '' }) {
       throw createError('Only Super Admin or Source Branch Admin can cancel this transfer.', 403);
     }
 
-    // Revert/refund the stock back to the SOURCE branch
-    const revertPromises = transfer.products.map(async (item) => {
-      await BranchStock.findOneAndUpdate(
-        { branch: transfer.sourceBranch, productId: item.product },
-        { $inc: { quantityInStock: Number(item.quantity) } },
-        { upsert: true, new: true }
-      );
+    // Revert/refund the stock back to the SOURCE branch ONLY for trips that were actually dispatched (started)!
+    const revertPromises = (transfer.transports || []).map(async (tr) => {
+      if (tr.tripStartedAt || tr.status === 'IN_TRANSIT') {
+        const tripItems = tr.items || [];
+        for (const itm of tripItems) {
+          const mainProd = (transfer.products || []).find(p => String(p.product) === String(itm.product));
+          const ppp = Number(itm.piecesPerPack || mainProd?.piecesPerPack || 1);
+          const unitsToRefund = Number(itm.quantity || (Number(itm.packQuantity || 1) * ppp));
+
+          if (unitsToRefund > 0) {
+            await BranchStock.findOneAndUpdate(
+              { branch: transfer.sourceBranch, productId: itm.product },
+              { $inc: { quantityInStock: Number(unitsToRefund) } },
+              { upsert: true, new: true }
+            );
+
+            const bId = itm.batchId || mainProd?.batchId;
+            if (bId) {
+              try {
+                const Batch = require('../models/Batch');
+                await Batch.findByIdAndUpdate(bId, {
+                  $inc: { availableQuantity: Number(unitsToRefund) }
+                });
+              } catch (bErr) {
+                console.error('Error restoring batch quantity on cancel:', bErr);
+              }
+            }
+          }
+        }
+      }
     });
 
     await Promise.all(revertPromises);

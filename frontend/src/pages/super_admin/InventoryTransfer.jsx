@@ -336,18 +336,17 @@ export function InventoryTransfer({ api, session, onNotice, refreshCoreData }) {
 
     const packType = mainProd?.packType || item.packType || 'Carton'
 
+    // Prioritize exact item packQuantity or calculated from total pieces
     let dispatchedPacks = 0
-    if (trip.dispatchedQty) {
+    if (Number(item.packQuantity) > 0) {
+      dispatchedPacks = Number(item.packQuantity)
+    } else if (Number(item.dispatchedPackQuantity) > 0) {
+      dispatchedPacks = Number(item.dispatchedPackQuantity)
+    } else if (Number(item.quantity || 0) > 0 && piecesPerPack > 1) {
+      dispatchedPacks = Math.round(Number(item.quantity) / piecesPerPack)
+    } else if (trip.dispatchedQty) {
       const match = String(trip.dispatchedQty).match(/(\d+(\.\d+)?)/)
       if (match) dispatchedPacks = Number(match[1])
-    }
-
-    if (dispatchedPacks <= 0 && Number(item.dispatchedPackQuantity) > 0) {
-      dispatchedPacks = Number(item.dispatchedPackQuantity)
-    } else if (dispatchedPacks <= 0 && Number(item.quantity || 0) > 0 && piecesPerPack > 1) {
-      dispatchedPacks = Math.round(Number(item.quantity) / piecesPerPack)
-    } else if (dispatchedPacks <= 0 && Number(item.packQuantity || 0) > 0) {
-      dispatchedPacks = Number(item.packQuantity)
     }
     if (dispatchedPacks <= 0) dispatchedPacks = 1
 
@@ -1095,19 +1094,18 @@ export function InventoryTransfer({ api, session, onNotice, refreshCoreData }) {
       // Calculate exact cartons/packs dispatched in this trip:
       let dispatchedPacks = 0
 
-      // If text says "2 carton (pendol)" or "2 boxes"
-      if (transport.dispatchedQty) {
+      // 1. Prioritize exact item packQuantity in this trip
+      if (Number(item.packQuantity) > 0) {
+        dispatchedPacks = Number(item.packQuantity)
+      } else if (Number(item.dispatchedPackQuantity) > 0) {
+        dispatchedPacks = Number(item.dispatchedPackQuantity)
+      } else if (Number(item.quantity || 0) > 0 && piecesPerPack > 1) {
+        dispatchedPacks = Math.round(Number(item.quantity) / piecesPerPack)
+      } else if (Number(item.unitQty || 0) > 0) {
+        dispatchedPacks = Number(item.unitQty)
+      } else if (transport.dispatchedQty) {
         const match = String(transport.dispatchedQty).match(/(\d+(\.\d+)?)/)
         if (match) dispatchedPacks = Number(match[1])
-      }
-
-      // If total tablets quantity is given (e.g. 4800 tablets) and piecesPerPack = 2400 -> 2 cartons
-      if (dispatchedPacks <= 0 && Number(item.quantity || 0) > 0 && piecesPerPack > 1) {
-        dispatchedPacks = Math.round(Number(item.quantity) / piecesPerPack)
-      } else if (dispatchedPacks <= 0 && Number(item.packQuantity || 0) > 0) {
-        dispatchedPacks = Number(item.packQuantity)
-      } else if (dispatchedPacks <= 0 && Number(item.unitQty || 0) > 0) {
-        dispatchedPacks = Number(item.unitQty)
       }
 
       if (dispatchedPacks <= 0) {
@@ -1996,7 +1994,7 @@ export function InventoryTransfer({ api, session, onNotice, refreshCoreData }) {
                         </td>
                         <td style={{ padding: '16px' }}>
                           {t.transports && t.transports.length > 0 ? (
-                            <div className="cluster gap-2 wrap-row align-center">
+                            <div className="stack gap-2" style={{ minWidth: '280px' }}>
                               {t.transports.map((tr, trIdx) => {
                                 const isTripReceived = tr.status === 'RECEIVED'
                                 const tripKey = `${t._id}_${trIdx}`
@@ -2007,9 +2005,12 @@ export function InventoryTransfer({ api, session, onNotice, refreshCoreData }) {
                                     key={trIdx} 
                                     className="cluster gap-2 align-center p-2 rounded x-small"
                                     style={{ 
-                                      background: isTripReceived ? 'rgba(16, 185, 129, 0.1)' : 'var(--panel-strong)', 
+                                      background: isTripReceived ? 'rgba(16, 185, 129, 0.08)' : 'var(--panel-strong)', 
                                       border: isTripReceived ? '1px solid #10b981' : '1px solid var(--border)',
-                                      whiteSpace: 'nowrap'
+                                      width: '100%',
+                                      display: 'flex',
+                                      flexWrap: 'wrap',
+                                      justifyContent: 'space-between'
                                     }}
                                   >
                                     <span className={`badge small font-bold ${isTripReceived ? 'success' : ''}`} style={{ fontSize: '0.65rem' }}>
@@ -2059,26 +2060,42 @@ export function InventoryTransfer({ api, session, onNotice, refreshCoreData }) {
                                       </span>
                                     )}
 
-                                    {/* Separate Trip Inspect & Confirm Button for Destination Admin */}
+                                    {/* Separate Trip Inspect & Confirm Button for Destination Admin (ONLY if trip was dispatched / started) */}
                                     {canConfirm && !isTripReceived && tr.status !== 'REJECTED' && (
-                                      <button
-                                        type="button"
-                                        className="btn btn-primary small glow-on-hover"
-                                        style={{ 
-                                          padding: '2px 8px', 
-                                          fontSize: '0.65rem', 
-                                          background: '#10b981', 
-                                          borderColor: '#059669', 
-                                          color: '#fff',
-                                          marginLeft: '4px' 
-                                        }}
-                                        onClick={() => handleReceiveTrip(t._id, trIdx, tr.tripNumber)}
-                                        disabled={isTripReceiving}
-                                        title={`Inspect & receive ${tr.tripNumber || `Trip ${trIdx + 1}`} at ${t.destBranch}`}
-                                      >
-                                        <CheckCircle2 size={11} style={{ marginRight: '2px', display: 'inline' }} />
-                                        Inspect & Receive
-                                      </button>
+                                      tr.tripStartedAt || tr.status === 'IN_TRANSIT' ? (
+                                        <button
+                                          type="button"
+                                          className="btn btn-primary small glow-on-hover"
+                                          style={{ 
+                                            padding: '2px 8px', 
+                                            fontSize: '0.65rem', 
+                                            background: '#10b981', 
+                                            borderColor: '#059669', 
+                                            color: '#fff',
+                                            marginLeft: '4px' 
+                                          }}
+                                          onClick={() => handleReceiveTrip(t._id, trIdx, tr.tripNumber)}
+                                          disabled={isTripReceiving}
+                                          title={`Inspect & receive ${tr.tripNumber || `Trip ${trIdx + 1}`} at ${t.destBranch}`}
+                                        >
+                                          <CheckCircle2 size={11} style={{ marginRight: '2px', display: 'inline' }} />
+                                          Inspect & Receive
+                                        </button>
+                                      ) : (
+                                        <span 
+                                          className="badge small font-mono" 
+                                          style={{ 
+                                            fontSize: '0.65rem', 
+                                            background: '#f1f5f9', 
+                                            color: '#64748b', 
+                                            borderColor: '#cbd5e1',
+                                            marginLeft: '4px' 
+                                          }}
+                                          title="Waiting for source branch to dispatch vehicle"
+                                        >
+                                          ⏳ Awaiting Dispatch
+                                        </span>
+                                      )
                                     )}
 
                                     {tr.status === 'REJECTED' && (

@@ -542,7 +542,8 @@ function App() {
     setReport(null)
     setCart([])
     navigate('/')
-    setNotice({ type: 'info', text: 'Signed out.' })
+    // Do not show ugly "Signed out." banner on login screen
+    setNotice(null)
   }
 
   function handleRequestError(error, fallback) {

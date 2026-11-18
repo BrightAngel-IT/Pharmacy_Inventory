@@ -58,28 +58,82 @@ router.post('/', requireAuth, requireRole(['super_admin']), async (req, res, nex
   }
 });
 
-// Destination Branch Admin (or Super Admin) confirms receipt of a specific trip (Trip 1, Trip 2, etc.)
+// Source Branch Admin (or Super Admin) marks a trip as dispatched and departing
 router.post('/:id/trips/:tripIndex/start', requireAuth, requireRole(['super_admin', 'admin']), async (req, res, next) => {
   try {
     const { id, tripIndex } = req.params;
     const Transfer = require('../models/Transfer');
+    const BranchStock = require('../models/BranchStock');
+    const Batch = require('../models/Batch');
+    const Product = require('../models/Product');
+
     const transfer = await Transfer.findById(id);
     if (!transfer) return res.status(404).json({ message: 'Transfer record not found.' });
+
+    // Authorization check: Only Source Branch Admin or Super Admin can dispatch/start trip
+    const isAuthorized = req.user.role === 'super_admin' || req.user.branch === transfer.sourceBranch;
+    if (!isAuthorized) {
+      return res.status(403).json({ message: `Only the admin of ${transfer.sourceBranch} can dispatch and start this trip.` });
+    }
 
     const idx = parseInt(tripIndex, 10);
     if (!transfer.transports || !transfer.transports[idx]) {
       return res.status(404).json({ message: 'Trip not found.' });
     }
 
-    transfer.transports[idx].status = 'IN_TRANSIT';
-    transfer.transports[idx].tripStartedAt = new Date();
-    transfer.transports[idx].tripStartedBy = `${req.user.name || req.user.username || 'Admin'} (${req.user.branch || req.user.role})`;
+    const trip = transfer.transports[idx];
+    if (trip.tripStartedAt) {
+      return res.status(400).json({ message: `Trip ${idx + 1} has already been dispatched / started!` });
+    }
+
+    // Deduct only this trip's assigned items from Source Branch Stock and Batch!
+    const tripItems = Array.isArray(trip.items) && trip.items.length > 0 ? trip.items : [];
+    for (const itm of tripItems) {
+      const mainProd = (transfer.products || []).find(p => String(p.product) === String(itm.product));
+      const ppp = Number(itm.piecesPerPack || mainProd?.piecesPerPack || 1);
+      const unitsToDeduct = Number(itm.quantity || (Number(itm.packQuantity || 1) * ppp));
+
+      if (unitsToDeduct > 0) {
+        // Check source stock
+        const sStock = await BranchStock.findOne({ branch: transfer.sourceBranch, productId: itm.product });
+        const avail = sStock ? sStock.quantityInStock : 0;
+        if (avail < unitsToDeduct) {
+          const pr = await Product.findById(itm.product).lean();
+          const pName = pr ? pr.name : itm.productName || 'Product';
+          return res.status(400).json({ 
+            message: `Insufficient stock in ${transfer.sourceBranch} to dispatch "${pName}". Available: ${avail} pcs, Trip requires: ${unitsToDeduct} pcs.` 
+          });
+        }
+
+        // Deduct from Source BranchStock
+        await BranchStock.findOneAndUpdate(
+          { branch: transfer.sourceBranch, productId: itm.product },
+          { $inc: { quantityInStock: -Number(unitsToDeduct) } }
+        );
+
+        // Deduct from Source Batch
+        const bId = itm.batchId || mainProd?.batchId;
+        if (bId) {
+          try {
+            await Batch.findByIdAndUpdate(bId, {
+              $inc: { availableQuantity: -Number(unitsToDeduct) }
+            });
+          } catch (bErr) {
+            console.error('Error deducting batch quantity during trip start:', bErr);
+          }
+        }
+      }
+    }
+
+    trip.status = 'IN_TRANSIT';
+    trip.tripStartedAt = new Date();
+    trip.tripStartedBy = `${req.user.name || req.user.username || 'Admin'} (${req.user.branch || req.user.role})`;
     
-    // update parent transfer status as well if needed
+    // update parent transfer status as well
     transfer.status = 'IN_TRANSIT';
 
     await transfer.save();
-    res.json({ message: `Trip ${idx + 1} marked as IN_TRANSIT (Dispatched)!`, transfer });
+    res.json({ message: `Trip ${idx + 1} dispatched! Stock deducted from ${transfer.sourceBranch}. Vehicle is now on route.`, transfer });
   } catch (error) {
     next(error);
   }

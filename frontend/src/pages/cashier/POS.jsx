@@ -63,6 +63,12 @@ export function POS({
   }, [cart.length])
 
   const [isSearchModalOpen, setIsSearchModalOpen] = useState(false)
+  const [inlineSearch, setInlineSearch] = useState('')
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false)
+  const [highlightedIndex, setHighlightedIndex] = useState(0)
+  const searchInputRef = React.useRef(null)
+  const dropdownRef = React.useRef(null)
+
   const [modalSearch, setModalSearch] = useState('')
   const [selectedItem, setSelectedItem] = useState(null)
   const [modalQty, setModalQty] = useState(1)
@@ -185,6 +191,70 @@ export function POS({
     c.name.toLowerCase().includes(customerSearch.toLowerCase())
   )
 
+  // Filter products for inline autocomplete
+  const inlineFilteredProducts = React.useMemo(() => {
+    if (!inlineSearch || !inlineSearch.trim()) return []
+    const q = inlineSearch.toLowerCase().trim()
+    return catalogProducts.filter(p =>
+      (p.name && p.name.toLowerCase().includes(q)) ||
+      (p.sku && p.sku.toLowerCase().includes(q)) ||
+      (p.barcode && p.barcode.toLowerCase().includes(q)) ||
+      (p.genericName && p.genericName.toLowerCase().includes(q)) ||
+      (p.category && p.category.toLowerCase().includes(q))
+    ).slice(0, 10)
+  }, [catalogProducts, inlineSearch])
+
+  // Close dropdown on outside click
+  React.useEffect(() => {
+    function handleClickOutside(event) {
+      if (
+        dropdownRef.current && !dropdownRef.current.contains(event.target) &&
+        searchInputRef.current && !searchInputRef.current.contains(event.target)
+      ) {
+        setIsDropdownOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
+
+  const handleSelectInlineProduct = (product) => {
+    if (!product) return
+    addProductToCart(product)
+    setInlineSearch('')
+    setIsDropdownOpen(false)
+    setHighlightedIndex(0)
+    if (searchInputRef.current) {
+      searchInputRef.current.focus()
+    }
+  }
+
+  const handleKeyDownInlineSearch = (e) => {
+    if (!isDropdownOpen || inlineFilteredProducts.length === 0) {
+      if (e.key === 'ArrowDown' && inlineFilteredProducts.length > 0) {
+        setIsDropdownOpen(true)
+        setHighlightedIndex(0)
+        e.preventDefault()
+      }
+      return
+    }
+
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      setHighlightedIndex(prev => (prev + 1) % inlineFilteredProducts.length)
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      setHighlightedIndex(prev => (prev - 1 + inlineFilteredProducts.length) % inlineFilteredProducts.length)
+    } else if (e.key === 'Enter') {
+      e.preventDefault()
+      if (inlineFilteredProducts[highlightedIndex]) {
+        handleSelectInlineProduct(inlineFilteredProducts[highlightedIndex])
+      }
+    } else if (e.key === 'Escape') {
+      setIsDropdownOpen(false)
+    }
+  }
+
   const categories = ['All', ...new Set(catalogProducts.map(p => p.category))]
   const filteredProducts = catalogProducts.filter(p =>
     (activeCategory === 'All' || p.category === activeCategory)
@@ -276,21 +346,227 @@ export function POS({
             </div>
           </div>
 
-          <div className="input-shell compact mb-2" style={{
-            background: 'var(--panel)',
-            border: '1px solid var(--border)',
-            borderRadius: '999px',
-            cursor: 'pointer',
-            padding: '2px 24px',
-            boxShadow: 'var(--shadow-sm)'
-          }} onClick={() => setIsSearchModalOpen(true)}>
-            <Search size={18} className="muted" />
-            <input
-              readOnly
-              className="ghost-input"
-              placeholder="Find item..."
-              style={{ cursor: 'pointer', fontSize: '0.9rem' }}
-            />
+          <div style={{ position: 'relative', width: '100%', marginBottom: '8px' }}>
+            <div
+              className="input-shell compact"
+              style={{
+                background: 'var(--panel)',
+                border: isDropdownOpen ? '1.5px solid var(--accent)' : '1px solid var(--border)',
+                borderRadius: '12px',
+                padding: '4px 14px',
+                boxShadow: isDropdownOpen ? '0 0 0 3px var(--accent-soft)' : 'var(--shadow-sm)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                transition: 'all 0.2s ease'
+              }}
+            >
+              <Search size={18} className={isDropdownOpen ? 'accent-text' : 'muted'} />
+              <input
+                ref={searchInputRef}
+                className="ghost-input"
+                placeholder="Find medicine / item (Type name, code, brand)... [or press Enter]"
+                style={{ fontSize: '0.88rem', flex: 1, padding: '4px 0' }}
+                value={inlineSearch}
+                onChange={(e) => {
+                  setInlineSearch(e.target.value)
+                  setIsDropdownOpen(true)
+                  setHighlightedIndex(0)
+                }}
+                onFocus={() => {
+                  if (inlineSearch.trim().length > 0) {
+                    setIsDropdownOpen(true)
+                  }
+                }}
+                onKeyDown={handleKeyDownInlineSearch}
+              />
+              {inlineSearch && (
+                <button
+                  type="button"
+                  style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', padding: '2px', display: 'flex', alignItems: 'center' }}
+                  onClick={() => {
+                    setInlineSearch('')
+                    setIsDropdownOpen(false)
+                    if (searchInputRef.current) searchInputRef.current.focus()
+                  }}
+                  title="Clear"
+                >
+                  <X size={15} />
+                </button>
+              )}
+              <button
+                type="button"
+                className="pill neutral-soft"
+                style={{
+                  fontSize: '0.68rem',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  border: '1px solid var(--border)',
+                  padding: '2px 8px',
+                  whiteSpace: 'nowrap'
+                }}
+                onClick={() => setIsSearchModalOpen(true)}
+                title="Open Full Catalog Modal"
+              >
+                Catalog View
+              </button>
+            </div>
+
+            {/* Inline Autocomplete Dropdown List */}
+            {isDropdownOpen && inlineSearch.trim().length > 0 && (
+              <div
+                ref={dropdownRef}
+                className="animate-fade"
+                style={{
+                  position: 'absolute',
+                  top: 'calc(100% + 4px)',
+                  left: 0,
+                  right: 0,
+                  zIndex: 9999,
+                  background: 'var(--panel)',
+                  border: '1px solid var(--border)',
+                  borderRadius: '12px',
+                  boxShadow: '0 12px 30px rgba(0,0,0,0.18)',
+                  maxHeight: '340px',
+                  overflowY: 'auto',
+                  display: 'flex',
+                  flexDirection: 'column'
+                }}
+              >
+                {inlineFilteredProducts.length > 0 ? (
+                  <>
+                    <div
+                      style={{
+                        padding: '6px 12px',
+                        background: 'var(--bg-soft)',
+                        borderBottom: '1px solid var(--border)',
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        fontSize: '0.68rem',
+                        fontWeight: 700,
+                        color: 'var(--muted)',
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.04em'
+                      }}
+                    >
+                      <span>{inlineFilteredProducts.length} Match(es) Found — Press [Enter] or Click to Add</span>
+                      <span>Use &uarr; &darr; keys to navigate</span>
+                    </div>
+                    {inlineFilteredProducts.map((prod, idx) => {
+                      const isHighlighted = idx === highlightedIndex
+                      const regularPrice = getRegularPrice(prod)
+                      const loyaltyPrice = getLoyaltySellingPrice(prod)
+                      const isLoyalty = checkoutForm.loyaltyCard && loyaltyPrice < regularPrice
+                      const displayPrice = isLoyalty ? loyaltyPrice : regularPrice
+                      const inStock = (prod.quantityInStock || 0) > 0
+
+                      return (
+                        <div
+                          key={prod._id}
+                          style={{
+                            padding: '8px 12px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            gap: '12px',
+                            cursor: inStock ? 'pointer' : 'not-allowed',
+                            background: isHighlighted ? 'var(--accent-soft)' : 'transparent',
+                            borderLeft: isHighlighted ? '3px solid var(--accent)' : '3px solid transparent',
+                            borderBottom: '1px solid var(--border)',
+                            transition: 'all 0.1s ease',
+                            opacity: inStock ? 1 : 0.6
+                          }}
+                          onMouseEnter={() => setHighlightedIndex(idx)}
+                          onClick={() => {
+                            if (inStock) handleSelectInlineProduct(prod)
+                          }}
+                        >
+                          {/* Item Left: Name, SKU, Generic, Dosage */}
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              <strong style={{ fontSize: '0.85rem', color: isHighlighted ? 'var(--accent-strong)' : 'var(--text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                {prod.name}
+                              </strong>
+                              {prod.itemType === 'TABLET_CAPSULE' && (
+                                <span className="pill" style={{ fontSize: '0.58rem', padding: '1px 5px', background: 'var(--bg-soft)', border: '1px solid var(--border)', color: 'var(--muted)' }}>
+                                  {prod.tabletsPerCard || 12} tabs/card
+                                </span>
+                              )}
+                              {prod.category && (
+                                <span className="pill neutral-soft" style={{ fontSize: '0.58rem', padding: '1px 5px' }}>
+                                  {prod.category}
+                                </span>
+                              )}
+                            </div>
+                            <div style={{ display: 'flex', gap: '8px', fontSize: '0.68rem', color: 'var(--muted)', marginTop: '2px' }}>
+                              {prod.sku && <span>SKU: {prod.sku}</span>}
+                              {prod.barcode && <span>Code: {prod.barcode}</span>}
+                              {prod.genericName && <span>Gen: {prod.genericName}</span>}
+                            </div>
+                          </div>
+
+                          {/* Item Right: Stock & Price */}
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '14px', textAlign: 'right', flexShrink: 0 }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
+                              <span
+                                style={{
+                                  fontSize: '0.68rem',
+                                  fontWeight: 700,
+                                  color: inStock ? (prod.quantityInStock <= prod.reorderLevel ? 'var(--warning-strong, #b45309)' : 'var(--success)') : 'var(--danger)'
+                                }}
+                              >
+                                {inStock ? `${prod.quantityInStock} ${prod.unit || 'units'}` : 'Out of Stock'}
+                              </span>
+                              {prod.rackLabel && (
+                                <span style={{ fontSize: '0.62rem', color: 'var(--muted)' }}>Rack: {prod.rackLabel}</span>
+                              )}
+                            </div>
+
+                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', minWidth: '70px' }}>
+                              <strong style={{ fontSize: '0.88rem', color: 'var(--text-strong)' }}>
+                                {formatCurrency(displayPrice)}
+                              </strong>
+                              {isLoyalty && (
+                                <span style={{ fontSize: '0.6rem', color: 'var(--success)', fontWeight: 700 }}>
+                                  Loyalty
+                                </span>
+                              )}
+                            </div>
+
+                            <button
+                              type="button"
+                              className="btn btn-primary small"
+                              style={{
+                                padding: '4px 8px',
+                                borderRadius: '6px',
+                                fontSize: '0.72rem',
+                                fontWeight: 700,
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '3px'
+                              }}
+                              disabled={!inStock}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                if (inStock) handleSelectInlineProduct(prod)
+                              }}
+                            >
+                              <Plus size={12} />
+                              <span>Add</span>
+                            </button>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </>
+                ) : (
+                  <div style={{ padding: '16px', textAlign: 'center', color: 'var(--muted)', fontSize: '0.82rem' }}>
+                    No medicines matching "<strong>{inlineSearch}</strong>" found.
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           <div className={`scanner-panel p-3 ${barcodeValue ? 'animate-pulse-soft' : ''}`} style={{ borderRadius: '12px', background: barcodeValue ? 'linear-gradient(145deg, var(--accent-soft), transparent)' : 'var(--bg-soft)', border: `1px solid ${barcodeValue ? 'var(--accent)' : 'var(--border)'}`, transition: 'all 0.3s ease', marginBottom: '8px' }}>
@@ -364,10 +640,53 @@ export function POS({
                     </div>
                   )}
                 </div>
-                <div className="qty-box" style={{ background: 'var(--bg-soft)', borderRadius: '999px', padding: '2px', justifyContent: 'center', width: 'fit-content', justifySelf: 'center' }}>
-                  <button className="qty-btn" type="button" style={{ width: '24px', height: '24px', fontSize: '0.85rem', borderRadius: '999px' }} onClick={() => changeCartQuantity(item.productId, 'decrease')}>-</button>
-                  <strong style={{ minWidth: '24px', textAlign: 'center', fontSize: '0.9rem', fontWeight: 800 }}>{item.quantity}</strong>
-                  <button className="qty-btn" type="button" style={{ width: '24px', height: '24px', fontSize: '0.85rem', borderRadius: '999px' }} onClick={() => changeCartQuantity(item.productId, 'increase')}>+</button>
+                <div className="qty-box" style={{ background: 'var(--bg-soft)', borderRadius: '8px', padding: '2px 4px', justifyContent: 'center', width: 'fit-content', justifySelf: 'center', display: 'flex', alignItems: 'center', gap: '3px', border: '1px solid var(--border)' }}>
+                  <button className="qty-btn" type="button" style={{ width: '24px', height: '24px', fontSize: '0.85rem', borderRadius: '6px' }} onClick={() => changeCartQuantity(item.productId, 'decrease')}>-</button>
+                  <input
+                    type="number"
+                    min="1"
+                    max={item.available || 999999}
+                    value={item.quantity}
+                    onChange={(e) => {
+                      const val = parseInt(e.target.value, 10)
+                      const targetQty = isNaN(val) ? 0 : Math.max(0, Math.min(val, item.available || 999999))
+                      const regularPrice = Number(item.price || 0)
+                      const loyaltyPrice = Number(item.loyaltyDiscount || 0)
+                      const effectivePrice = checkoutForm.loyaltyCard
+                        ? Math.max(0, Math.min(regularPrice, loyaltyPrice || regularPrice))
+                        : regularPrice
+                      setCart(currentCart => currentCart.map(c => {
+                        if (c.productId === item.productId) {
+                          return {
+                            ...c,
+                            quantity: targetQty,
+                            lineTotal: targetQty * effectivePrice
+                          }
+                        }
+                        return c
+                      }))
+                    }}
+                    onBlur={(e) => {
+                      const val = parseInt(e.target.value, 10)
+                      if (isNaN(val) || val <= 0) {
+                        // Reset to at least 1 or remove if 0
+                        changeCartQuantity(item.productId, 'decrease')
+                      }
+                    }}
+                    style={{
+                      width: '44px',
+                      height: '24px',
+                      textAlign: 'center',
+                      fontSize: '0.9rem',
+                      fontWeight: 800,
+                      border: '1px solid var(--border)',
+                      borderRadius: '4px',
+                      background: 'var(--panel)',
+                      color: 'var(--text-strong)',
+                      padding: 0
+                    }}
+                  />
+                  <button className="qty-btn" type="button" style={{ width: '24px', height: '24px', fontSize: '0.85rem', borderRadius: '6px' }} onClick={() => changeCartQuantity(item.productId, 'increase')}>+</button>
                 </div>
                 <div style={{ textAlign: 'center' }}>
                   <span style={{ display: 'inline-flex', minWidth: '84px', justifyContent: 'center', fontSize: '0.8rem', fontWeight: 800, color: 'var(--text-strong)' }}>{formatCurrency(getRegularPrice(item))}</span>

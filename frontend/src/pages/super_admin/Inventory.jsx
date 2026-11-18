@@ -103,9 +103,24 @@ export function Inventory({
   const totalPages = Math.ceil(filteredItems.length / itemsPerPage)
   const paginatedItems = filteredItems.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage)
 
-  const totalValue = filteredItems.reduce((sum, p) => sum + (p.price * p.quantityInStock), 0)
-  const totalUnits = filteredItems.reduce((sum, p) => sum + p.quantityInStock, 0)
-  const criticalCount = filteredItems.filter(p => p.quantityInStock <= p.reorderLevel).length
+  const totalValue = filteredItems.reduce((sum, p) => {
+    const qty = activeBranchFilter !== 'All' 
+      ? ((p.branchStocks || []).find(bs => bs.branch === activeBranchFilter)?.quantityInStock ?? 0)
+      : p.quantityInStock
+    return sum + (p.price * qty)
+  }, 0)
+  const totalUnits = filteredItems.reduce((sum, p) => {
+    const qty = activeBranchFilter !== 'All' 
+      ? ((p.branchStocks || []).find(bs => bs.branch === activeBranchFilter)?.quantityInStock ?? 0)
+      : p.quantityInStock
+    return sum + qty
+  }, 0)
+  const criticalCount = filteredItems.filter(p => {
+    const qty = activeBranchFilter !== 'All' 
+      ? ((p.branchStocks || []).find(bs => bs.branch === activeBranchFilter)?.quantityInStock ?? 0)
+      : p.quantityInStock
+    return qty <= p.reorderLevel
+  }).length
 
   const [showHistory, setShowHistory] = useState(false)
 
@@ -363,7 +378,9 @@ export function Inventory({
                     <td>
                       <div className="stack">
                         <span style={{ fontSize: '1.05rem', fontWeight: 700, color: isOut ? 'var(--danger)' : isLow ? 'var(--warning)' : 'var(--success)' }}>
-                          {product.quantityInStock}
+                          {activeBranchFilter !== 'All' 
+                            ? ((product.branchStocks || []).find(bs => bs.branch === activeBranchFilter)?.quantityInStock ?? 0)
+                            : product.quantityInStock}
                         </span>
                         <span className="muted small">{product.unit}</span>
                       </div>
